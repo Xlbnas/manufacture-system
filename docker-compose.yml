@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./manufacture_backend
+      dockerfile: Dockerfile
+    volumes:
+      - ./manufacture_backend:/app
+    environment:
+      - SECRET_KEY=your-secret-key-change-in-production
+      - DEBUG=False
+      - ALLOWED_HOSTS=backend,localhost,127.0.0.1
+      - DATABASE_URL=sqlite:///db.sqlite3
+    ports:
+      - "8000:8000"
+    restart: always
+
+  frontend:
+    build:
+      context: ./manufacture_frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: always
+
+networks:
+  default:
+    name: manufacture-network
