@@ -13,7 +13,7 @@ services:
       - ALLOWED_HOSTS=backend,localhost,127.0.0.1
       - DATABASE_URL=sqlite:///db.sqlite3
     ports:
-      - "8000:8000"
+      - "9876:9876"
     restart: always
 
   frontend:
@@ -21,7 +21,7 @@ services:
       context: ./manufacture_frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "5173:5173"
     depends_on:
       - backend
     restart: always

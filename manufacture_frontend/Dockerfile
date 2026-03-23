@@ -19,8 +19,8 @@ RUN npm run build
 # 安装serve包用于提供静态文件
 RUN npm install -g serve
 
-# 暴露3000端口
-EXPOSE 3000
+# 暴露5173端口
+EXPOSE 5173
 
 # 启动服务
-CMD ["serve", "-s", "dist", "-l", "3000"]
+CMD ["serve", "-s", "dist", "-l", "5173"]

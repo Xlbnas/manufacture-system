@@ -19,8 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制项目代码
 COPY . .
 
-# 暴露8000端口
-EXPOSE 8000
+# 暴露9876端口
+EXPOSE 9876
 
 # 启动命令
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "manufacture_backend.wsgi:application"]
+CMD ["gunicorn", "--bind", "0.0.0.0:9876", "manufacture_backend.wsgi:application"]
