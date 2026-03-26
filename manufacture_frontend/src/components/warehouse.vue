@@ -40,6 +40,9 @@ const batchForm = ref({
     { product: '', color: '', sizes: [], quantity: '' }
   ]
 })
+// 计划添加相关
+const planDialogVisible = ref(false)
+const selectedPlan = ref(null)
 const productColors = ref([])
 const productSizes = ref([])
 const batchItemColors = ref({})
@@ -678,6 +681,65 @@ const handleResize = () => {
 
 window.addEventListener('resize', handleResize)
 
+// 计划添加功能
+const openPlanDialog = () => {
+  selectedPlan.value = null
+  planDialogVisible.value = true
+}
+
+const savePlanProducts = async () => {
+  if (!selectedPlan.value) return
+  
+  try {
+    const plan = selectedPlan.value
+    const sizesData = plan.sizes_data || plan.sizes || []
+    const modelsData = plan.models_data || plan.models || []
+    
+    // 遍历所有尺码和型号，创建出库记录
+    for (const sizeItem of sizesData) {
+      for (let modelIndex = 0; modelIndex < modelsData.length; modelIndex++) {
+        const model = modelsData[modelIndex]
+        const quantity = Number(sizeItem.quantities?.[modelIndex]) || 0
+        
+        if (quantity > 0) {
+          // 查找对应的产品
+          const product = products.value.find(p => p.name === model.name)
+          if (product) {
+            // 验证数量限制
+            const validation = validateQuantityLimit(
+              plan.factory?.id || plan.factory_id,
+              product.id,
+              model.color,
+              sizeItem.name,
+              quantity
+            )
+            
+            if (!validation.valid) {
+              alert(`产品 ${model.name} - ${model.color} - ${sizeItem.name}:
+${validation.message}`)
+              return
+            }
+            
+            // 保存出库记录
+            await axios.post('http://127.0.0.1:9876/api/warehouse/', {
+              product: product.id,
+              color: model.color,
+              size: sizeItem.name,
+              quantity: quantity,
+              factory: plan.factory?.id || plan.factory_id
+            })
+          }
+        }
+      }
+    }
+    
+    planDialogVisible.value = false
+    fetchWarehouseData()
+  } catch (error) {
+    console.error('Error saving plan products:', error)
+  }
+}
+
 // 导入功能
 const openImportDialog = () => {
   importVisible.value = true
@@ -760,10 +822,23 @@ const handleImportSuccess = async (data) => {
   importVisible.value = false
 }
 
+// 计算计划总数量
+const calculatePlanTotal = (plan) => {
+  let total = 0
+  const sizesData = plan.sizes_data || plan.sizes || []
+  sizesData.forEach(sizeItem => {
+    const quantities = sizeItem.quantities || []
+    quantities.forEach(qty => {
+      total += Number(qty) || 0
+    })
+  })
+  return total
+}
+
 // 导出功能
 const exportToExcel = async () => {
   const workbook = new ExcelJS.Workbook()
-  const worksheet = workbook.addWorksheet('仓库数据')
+  const worksheet = workbook.addWorksheet('计划出库数据')
 
   // 设置表头
   worksheet.columns = [
@@ -791,7 +866,7 @@ const exportToExcel = async () => {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `仓库数据_${new Date().toISOString().split('T')[0]}.xlsx`
+  a.download = `计划出库数据_${new Date().toISOString().split('T')[0]}.xlsx`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -804,7 +879,7 @@ const exportToExcel = async () => {
     <el-card shadow="hover">
       <template #header>
         <div class="card-header">
-          <span>工厂仓库管理</span>
+          <span>计划出库管理</span>
           <div class="header-actions">
             <el-select v-model="selectedFactory" placeholder="选择工厂" @change="handleFactoryChange">
               <el-option
@@ -815,6 +890,7 @@ const exportToExcel = async () => {
               />
             </el-select>
             <el-button type="primary" @click="openDialog">添加产品</el-button>
+            <el-button type="info" @click="openPlanDialog">按计划添加</el-button>
             <el-button @click="batchMode = !batchMode">
               {{ batchMode ? '单个添加' : '批量录入' }}
             </el-button>
@@ -1046,6 +1122,43 @@ const exportToExcel = async () => {
       :fields="['product', 'color', 'size', 'quantity', 'factory']"
       :field-labels="{ product: '产品', color: '颜色', size: '尺码', quantity: '数量', factory: '工厂' }"
     />
+    
+    <!-- 计划选择对话框 -->
+    <el-dialog
+      v-model="planDialogVisible"
+      title="按计划添加产品"
+      width="600px"
+    >
+      <el-form label-width="80px">
+        <el-form-item label="选择计划">
+          <el-select v-model="selectedPlan" placeholder="选择生产计划" style="width: 100%">
+            <el-option
+              v-for="plan in productionPlans"
+              :key="plan.id"
+              :label="`${plan.name} (${plan.date})`"
+              :value="plan"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="selectedPlan">
+          <el-card shadow="hover">
+            <div class="plan-details">
+              <p><strong>计划名称：</strong>{{ selectedPlan.name }}</p>
+              <p><strong>计划日期：</strong>{{ selectedPlan.date }}</p>
+              <p><strong>目标工厂：</strong>{{ selectedPlan.factory?.name || '未知' }}</p>
+              <p><strong>型号数量：</strong>{{ (selectedPlan.models_data || selectedPlan.models || []).length }} 个</p>
+              <p><strong>总数量：</strong>{{ calculatePlanTotal(selectedPlan) }} 套</p>
+            </div>
+          </el-card>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="planDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="savePlanProducts">保存</el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

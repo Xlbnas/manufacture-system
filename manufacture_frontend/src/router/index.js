@@ -14,6 +14,12 @@ const routes = [
     redirect: '/dashboard'
   },
   {
+    path: '/dashboard',
+    name: 'Dashboard',
+    component: () => import('../components/dashboard.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/production',
     name: 'Production',
     component: () => import('../components/production.vue'),
@@ -32,21 +38,15 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
-    path: '/dashboard',
-    name: 'Dashboard',
-    component: () => import('../components/dashboard.vue'),
-    meta: { requiresAuth: true }
-  },
-  {
     path: '/factory',
     name: 'Factory',
     component: () => import('../components/factory.vue'),
     meta: { requiresAuth: true }
   },
   {
-    path: '/material',
-    name: 'Material',
-    component: () => import('../components/material.vue'),
+    path: '/supplies',
+    name: 'Supplies',
+    component: () => import('../components/supplies.vue'),
     meta: { requiresAuth: true }
   },
   {
@@ -55,7 +55,12 @@ const routes = [
     component: () => import('../components/product.vue'),
     meta: { requiresAuth: true }
   },
-
+  {
+    path: '/material',
+    name: 'Material',
+    component: () => import('../components/material.vue'),
+    meta: { requiresAuth: true }
+  }
 ]
 
 const router = createRouter({

@@ -4,27 +4,22 @@
       <h2>生产计划管理</h2>
       <div class="header-actions">
         <el-button type="danger" @click="refreshData">
-          <el-icon><Refresh /></el-icon> 刷新数据
+          <el-icon><Refresh /></el-icon>
+          <span>刷新数据</span>
         </el-button>
         <el-button type="success" @click="exportTable">
-          <el-icon><Download /></el-icon> 导出表格
+          <el-icon><Download /></el-icon>
+          <span>导出表格</span>
         </el-button>
         <el-button type="warning" @click="openImportDialog">
-          <el-icon><Upload /></el-icon> 导入表格
+          <el-icon><Upload /></el-icon>
+          <span>导入表格</span>
         </el-button>
         <el-button type="primary" @click="openTemplateManager">
-          <el-icon><Setting /></el-icon> 模板管理
+          <el-icon><Setting /></el-icon>
+          <span>模板管理</span>
         </el-button>
       </div>
-    </div>
-
-    <div class="input-group">
-      <el-input
-        v-model="newModel"
-        placeholder="输入型号名称"
-        style="width: 200px; margin-right: 10px;"
-      />
-      <el-button type="primary" @click="addModel">添加型号</el-button>
     </div>
 
     <div class="color-control">
@@ -68,7 +63,8 @@
               value-format="YYYY-MM-DD"
             />
             <el-button type="primary" @click="saveCurrentPlan">
-              <el-icon><Plus /></el-icon> 添加计划
+              <el-icon><Plus /></el-icon>
+              <span>添加计划</span>
             </el-button>
           </div>
         </div>
@@ -90,19 +86,21 @@
             <th rowspan="2">尺码</th>
             <th rowspan="2">耗料/套</th>
             <th v-for="(model, index) in models" :key="index" colspan="2">
-              <div class="model-header">
-                <el-input
-                  v-model="model.name"
-                  class="model-name-input"
-                  style="width: 80px; margin-right: 10px;"
-                />
-                <el-button
-                  type="danger"
-                  size="small"
-                  @click="deleteModel(index)"
+              <div class="model-header" @click.stop>
+                <span class="model-name">{{ model.name }}</span>
+                <el-select
+                  v-model="model.color"
+                  placeholder="选择颜色"
+                  style="width: 120px; margin-left: 10px;"
+                  @change="updateIncomingMaterials"
                 >
-                  <el-icon><Delete /></el-icon>
-                </el-button>
+                  <el-option
+                    v-for="color in availableColors"
+                    :key="color"
+                    :label="color"
+                    :value="color"
+                  />
+                </el-select>
               </div>
             </th>
           </tr>
@@ -129,7 +127,7 @@
                 />
               </template>
               <template v-else>
-                <div class="editable-cell">{{ size.materialPerSet.toFixed(3) }}</div>
+                <div class="editable-cell">{{ Number(size.materialPerSet).toFixed(3) }}</div>
               </template>
             </td>
             <template v-for="(model, modelIndex) in models" :key="modelIndex">
@@ -157,7 +155,7 @@
           <!-- 总计行 -->
           <tr class="total-row">
             <td>总计</td>
-            <td id="totalMaterials">总耗料为={{ totalMaterials }}</td>
+            <td id="totalMaterials">来料: {{ incomingMaterials }} | 用料: {{ totalMaterials }} | 余料: {{ remainingMaterials }}</td>
             <template v-for="(model, modelIndex) in models" :key="modelIndex">
               <td>{{ calculateTotalMetersForModel(modelIndex) }}</td>
               <td>{{ calculateTotalQuantityForModel(modelIndex) }}</td>
@@ -192,17 +190,24 @@
           <!-- 计划卡片列表 -->
           <div class="plans-container">
             <div v-for="plan in typeGroup" :key="plan.id" class="plan-card" @click="loadPlan(plan)">
-              <div class="plan-header">
-                <div class="plan-title">{{ plan.name }}</div>
-                <div class="plan-actions" @click.stop>
-                  <el-button type="primary" size="small" @click="loadPlan(plan)">加载</el-button>
-                  <el-button type="danger" size="small" @click="deletePlanById(plan.id)">删除</el-button>
+              <el-tooltip placement="top" effect="dark">
+                <template #content>
+                  <div style="white-space: pre-wrap;">{{ getPlanSizeDetails(plan) }}</div>
+                </template>
+                <div class="plan-content">
+                  <div class="plan-header">
+                    <div class="plan-title">{{ plan.name }}</div>
+                    <div class="plan-actions" @click.stop>
+                      <el-button type="primary" size="small" @click="loadPlan(plan)">加载</el-button>
+                      <el-button type="danger" size="small" @click="deletePlanById(plan.id)">删除</el-button>
+                    </div>
+                  </div>
+                  <div class="plan-summary">
+                    <span class="plan-models">型号: {{ (plan.models_data || plan.models || []).length }} 个</span>
+                    <span class="plan-total">总计: {{ calculatePlanTotalQuantity(plan) }} 套</span>
+                  </div>
                 </div>
-              </div>
-              <div class="plan-summary">
-                <span class="plan-models">型号: {{ (plan.models_data || plan.models || []).length }} 个</span>
-                <span class="plan-total">总计: {{ calculatePlanTotalQuantity(plan) }} 套</span>
-              </div>
+              </el-tooltip>
             </div>
           </div>
         </div>
@@ -225,7 +230,8 @@
         <div class="section-header">
           <h3>模板列表</h3>
           <el-button type="primary" @click="addTemplate">
-            <el-icon><Plus /></el-icon> 新建模板
+            <el-icon><Plus /></el-icon>
+            <span>新建模板</span>
           </el-button>
         </div>
         <el-table :data="templates" style="width: 100%">
@@ -235,10 +241,12 @@
           <el-table-column label="操作" width="200">
             <template #default="{ row }">
               <el-button size="small" @click="editTemplate(row)">
-                <el-icon><Edit /></el-icon> 编辑
+                <el-icon><Edit /></el-icon>
+                <span>编辑</span>
               </el-button>
               <el-button size="small" type="danger" @click="deleteTemplate(row.id)">
-                <el-icon><Delete /></el-icon> 删除
+                <el-icon><Delete /></el-icon>
+                <span>删除</span>
               </el-button>
             </template>
           </el-table-column>
@@ -249,32 +257,53 @@
       <div class="material-section">
         <div class="section-header">
           <h3>耗料数据管理</h3>
-          <div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <el-select v-model="selectedMaterialTemplate" placeholder="选择模板" style="width: 150px;">
+              <el-option
+                v-for="template in templates"
+                :key="template.id"
+                :label="template.name"
+                :value="template.name"
+              />
+            </el-select>
             <el-button size="small" @click="importMaterials">
-              <el-icon><Upload /></el-icon> 导入
+              <el-icon><Upload /></el-icon>
+              <span>导入</span>
             </el-button>
             <el-button size="small" @click="exportMaterials">
-              <el-icon><Download /></el-icon> 导出
+              <el-icon><Download /></el-icon>
+              <span>导出</span>
             </el-button>
           </div>
         </div>
-        <el-table :data="materials" style="width: 100%">
-          <el-table-column prop="size" label="尺码" width="120" />
-          <el-table-column prop="materialPerSet" label="耗料/套" width="120" />
-          <el-table-column prop="template" label="所属模板" width="180" />
-          <el-table-column label="操作" width="150">
+        <el-table :data="filteredMaterials" style="width: 100%" height="400">
+          <el-table-column prop="size" label="尺码" min-width="100" />
+          <el-table-column label="耗料/套" min-width="150">
             <template #default="{ row }">
-              <el-button size="small" @click="editMaterial(row)">
-                <el-icon><Edit /></el-icon> 编辑
-              </el-button>
+              <el-input-number
+                v-model="row.materialPerSet"
+                :precision="3"
+                :step="0.001"
+                :min="0"
+                size="small"
+                style="width: 120px"
+                @change="updateMaterialData(row)"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column prop="template" label="所属模板" min-width="120" />
+          <el-table-column label="操作" width="100" fixed="right">
+            <template #default="{ row }">
               <el-button size="small" type="danger" @click="deleteMaterial(row.id)">
-                <el-icon><Delete /></el-icon> 删除
+                <el-icon><Delete /></el-icon>
+                <span>删除</span>
               </el-button>
             </template>
           </el-table-column>
         </el-table>
         <el-button type="primary" @click="addMaterial" style="margin-top: 10px">
-          <el-icon><Plus /></el-icon> 添加耗料数据
+          <el-icon><Plus /></el-icon>
+          <span>添加耗料数据</span>
         </el-button>
       </div>
     </div>
@@ -439,13 +468,14 @@ const templatesData = {
 }
 
 // 响应式数据
-const newModel = ref('')
 const currentTemplate = ref('f116')
-const models = ref([{ name: 'F116' }])
+const models = ref([{ name: 'F116', color: '' }])
 const sizes = ref([])
 const zoomLevel = ref(100)
 const factories = ref([])
 const selectedFactory = ref(null)
+const availableColors = ref(['黑色', '卡其', '军绿', '丛林', '三沙', '藏蓝', '数码丛林', '数码海洋', '数码沙漠', '黑蟒纹', '绿蟒纹', '绿废墟', '灰废墟', '小绿人', '黑cp', 'cp', '绿cp'])
+const selectedMaterialTemplate = ref('')
 
 // 模板管理相关状态
 const templateManagerVisible = ref(false)
@@ -537,11 +567,168 @@ const totalMaterials = computed(() => {
     models.value.forEach((model, modelIndex) => {
       // 确保转换为数字
       const qty = Number(size.quantities[modelIndex]) || 0
-      total += size.materialPerSet * qty
+      const materialPerSet = Number(size.materialPerSet) || 0
+      total += materialPerSet * qty
     })
   })
   return total.toFixed(2)
 })
+
+// 筛选后的耗料数据
+const filteredMaterials = computed(() => {
+  // 当未选择模板时，默认选择第一个模板
+  if (!selectedMaterialTemplate.value && templates.value.length > 0) {
+    selectedMaterialTemplate.value = templates.value[0].name
+  }
+  
+  // 当选择了模板时，返回该模板的耗料数据
+  const templateKey = Object.keys(templateTypeNames).find(key => templateTypeNames[key] === selectedMaterialTemplate.value) || selectedMaterialTemplate.value
+  const templateData = templatesData[templateKey]
+  if (templateData) {
+    const templateMaterials = []
+    Object.entries(templateData).forEach(([size, materialPerSet]) => {
+      templateMaterials.push({
+        id: `${templateKey}-${size}`,
+        size: size,
+        materialPerSet: materialPerSet,
+        template: selectedMaterialTemplate.value
+      })
+    })
+    return templateMaterials
+  }
+  return []
+})
+
+// 更新耗料数据
+const updateMaterialData = (row) => {
+  const templateKey = Object.keys(templateTypeNames).find(key => templateTypeNames[key] === row.template) || row.template
+  if (templatesData[templateKey]) {
+    templatesData[templateKey][row.size] = parseFloat(row.materialPerSet)
+    ElMessage.success('耗料数据已更新')
+  }
+}
+
+// 布料库存数据
+const clothInventory = ref({})
+
+// 加载染色布库存
+const loadClothInventory = async () => {
+  try {
+    const response = await axios.get('http://127.0.0.1:9876/api/materials/')
+    const materials = response.data
+    const inventory = {}
+    materials.forEach(material => {
+      if (material.type === '面料') {
+        inventory[material.name] = material.quantity || 0
+      }
+    })
+    clothInventory.value = inventory
+  } catch (error) {
+    console.error('获取染色布库存失败:', error)
+    // 处理认证错误
+    if (error.response?.status === 401) {
+      const refreshResult = await authStore.refreshToken()
+      if (refreshResult.success) {
+        // 刷新令牌成功后重试
+        try {
+          const response = await axios.get('http://127.0.0.1:9876/api/materials/')
+          const materials = response.data
+          const inventory = {}
+          materials.forEach(material => {
+            if (material.type === '面料') {
+              inventory[material.name] = material.quantity || 0
+            }
+          })
+          clothInventory.value = inventory
+        } catch (retryError) {
+          console.error('重试获取染色布库存失败:', retryError)
+        }
+      }
+    }
+  }
+}
+
+// 来料数量（根据所选布料的库存）
+const incomingMaterials = computed(() => {
+  if (models.value.length === 0 || !models.value[0].color) {
+    return '0.00'
+  }
+  const clothName = models.value[0].color
+  const inventory = parseFloat(clothInventory.value[clothName] || 0)
+  return inventory.toFixed(2)
+})
+
+// 余料数量
+const remainingMaterials = computed(() => {
+  const incoming = parseFloat(incomingMaterials.value) || 0
+  const used = parseFloat(totalMaterials.value) || 0
+  return (incoming - used).toFixed(2)
+})
+
+// 更新来料数量
+const updateIncomingMaterials = () => {
+  loadClothInventory()
+}
+
+// 更新布料库存
+const updateClothInventory = async (clothName, quantity) => {
+  try {
+    // 查找对应的染色布材料
+    const response = await axios.get('http://127.0.0.1:9876/api/materials/')
+    const materials = response.data
+    const clothMaterial = materials.find(m => m.type === '面料' && m.name === clothName)
+    
+    if (clothMaterial) {
+      // 更新库存，确保quantity是数字类型
+      // 确保supplier和factory字段是正确的格式
+      const updatedMaterial = {
+        ...clothMaterial,
+        quantity: Number(quantity) || 0,
+        supplier: clothMaterial.supplier?.id || clothMaterial.supplier || null,
+        factory: clothMaterial.factory?.id || clothMaterial.factory || null
+      }
+      await axios.put(`http://127.0.0.1:9876/api/materials/${clothMaterial.id}/`, updatedMaterial)
+      // 重新加载库存
+      loadClothInventory()
+      ElMessage.success('染色布库存已更新')
+    }
+  } catch (error) {
+    console.error('更新染色布库存失败:', error)
+    console.error('错误详情:', error.response?.data)
+    // 处理认证错误
+    if (error.response?.status === 401) {
+      const refreshResult = await authStore.refreshToken()
+      if (refreshResult.success) {
+        // 刷新令牌成功后重试
+        try {
+          const response = await axios.get('http://127.0.0.1:9876/api/materials/')
+          const materials = response.data
+          const clothMaterial = materials.find(m => m.type === '面料' && m.name === clothName)
+          
+          if (clothMaterial) {
+            // 更新库存，确保quantity是数字类型
+            // 确保supplier和factory字段是正确的格式
+            const updatedMaterial = {
+              ...clothMaterial,
+              quantity: Number(quantity) || 0,
+              supplier: clothMaterial.supplier?.id || clothMaterial.supplier || null,
+              factory: clothMaterial.factory?.id || clothMaterial.factory || null
+            }
+            await axios.put(`http://127.0.0.1:9876/api/materials/${clothMaterial.id}/`, updatedMaterial)
+            // 重新加载库存
+            loadClothInventory()
+            ElMessage.success('染色布库存已更新')
+          }
+          return
+        } catch (retryError) {
+          console.error('重试更新染色布库存失败:', retryError)
+          ElMessage.error('更新染色布库存失败')
+        }
+      }
+    }
+    ElMessage.error('更新染色布库存失败')
+  }
+}
 
 // 方法
 const calculateRow = () => {
@@ -557,7 +744,8 @@ const calculateTotalMeters = (sizeIndex, modelIndex) => {
   }
   // 确保转换为数字
   const quantity = Number(size.quantities[modelIndex]) || 0
-  const total = size.materialPerSet * quantity
+  const materialPerSet = Number(size.materialPerSet) || 0
+  const total = materialPerSet * quantity
   return total.toFixed(2)
 }
 
@@ -570,7 +758,8 @@ const calculateTotalMetersForModel = (modelIndex) => {
     }
     // 确保转换为数字
     const quantity = Number(size.quantities[modelIndex]) || 0
-    total += size.materialPerSet * quantity
+    const materialPerSet = Number(size.materialPerSet) || 0
+    total += materialPerSet * quantity
   })
   return total.toFixed(2)
 }
@@ -589,24 +778,7 @@ const calculateTotalQuantityForModel = (modelIndex) => {
   return total
 }
 
-const addModel = () => {
-  if (newModel.value) {
-    models.value.push({ name: newModel.value })
-    // 为每个尺码添加新的数量字段
-    sizes.value.forEach(size => {
-      size.quantities.push(0)
-    })
-    newModel.value = ''
-  }
-}
 
-const deleteModel = (index) => {
-  models.value.splice(index, 1)
-  // 从每个尺码中移除对应的数量字段
-  sizes.value.forEach(size => {
-    size.quantities.splice(index, 1)
-  })
-}
 
 const changeTemplate = () => {
   const templateData = templatesData[currentTemplate.value]
@@ -621,6 +793,69 @@ const changeTemplate = () => {
       })
     }
     sizes.value = newSizes
+    
+    // 更新型号名称为模板名称
+    const templateName = templateTypeNames[currentTemplate.value] || currentTemplate.value
+    if (models.value.length > 0) {
+      models.value[0].name = templateName
+    } else {
+      models.value.push({ name: templateName, color: '' })
+    }
+    
+    // 从材料溯源获取颜色选项
+    fetchAvailableColors()
+  }
+}
+
+// 从材料溯源获取可用染色布
+const fetchAvailableColors = async () => {
+  try {
+    const response = await axios.get('http://127.0.0.1:9876/api/materials/')
+    const materials = response.data
+    // 提取所有染色布（面料）类型的名称
+    const cloths = new Set()
+    materials.forEach(material => {
+      if (material.type === '面料') {
+        if (material.name) {
+          cloths.add(material.name)
+        }
+      }
+    })
+    availableColors.value = Array.from(cloths)
+  } catch (error) {
+    console.error('获取染色布选项失败:', error)
+    // 处理认证错误
+    if (error.response?.status === 401) {
+      const refreshResult = await authStore.refreshToken()
+      if (refreshResult.success) {
+        // 刷新令牌成功后重试
+        try {
+          const response = await axios.get('http://127.0.0.1:9876/api/materials/')
+          const materials = response.data
+          // 提取所有染色布（面料）类型的名称
+          const cloths = new Set()
+          materials.forEach(material => {
+            if (material.type === '面料') {
+              if (material.name) {
+                cloths.add(material.name)
+              }
+            }
+          })
+          availableColors.value = Array.from(cloths)
+          return
+        } catch (retryError) {
+          console.error('重试获取染色布选项失败:', retryError)
+          // 如果重试失败，使用默认布料选项
+          availableColors.value = ['80/20布']
+        }
+      } else {
+        // 如果刷新令牌失败，使用默认布料选项
+        availableColors.value = ['80/20布']
+      }
+    } else {
+      // 如果其他错误，使用默认布料选项
+      availableColors.value = ['80/20布']
+    }
   }
 }
 
@@ -653,43 +888,20 @@ const exportTable = async () => {
     
     worksheet.columns = columns
     
-    // 合并表头单元格
-    // 第一行：型号名称
-    worksheet.mergeCells(1, 1, 1, 2) // 合并尺码和耗料/套
+    // 设置第一行的值（表头）
+    const headerRow = worksheet.getRow(1)
+    headerRow.getCell(1).value = '尺码'
+    headerRow.getCell(2).value = '耗料/套'
     
     let currentCol = 3
     models.value.forEach(model => {
-      worksheet.mergeCells(1, currentCol, 1, currentCol + 1) // 合并每个型号的两列
+      headerRow.getCell(currentCol).value = `${model.name} - 耗料/米`
+      headerRow.getCell(currentCol + 1).value = `${model.name} - 数量/套`
       currentCol += 2
     })
     
-    // 设置第一行的值
-    const firstRow = worksheet.getRow(1)
-    firstRow.getCell(1).value = '尺码'
-    firstRow.getCell(2).value = '耗料/套'
-    
-    currentCol = 3
-    models.value.forEach(model => {
-      const cell = firstRow.getCell(currentCol)
-      cell.value = model.name
-      cell.alignment = { horizontal: 'center', vertical: 'middle' }
-      currentCol += 2
-    })
-    
-    // 设置第二行的值（表头）
-    const secondRow = worksheet.getRow(2)
-    secondRow.getCell(1).value = '尺码'
-    secondRow.getCell(2).value = '耗料/套'
-    
-    currentCol = 3
-    models.value.forEach(model => {
-      secondRow.getCell(currentCol).value = '耗料/米'
-      secondRow.getCell(currentCol + 1).value = '数量/套'
-      currentCol += 2
-    })
-    
-    // 添加数据行，从第三行开始
-    let rowIndex = 3
+    // 添加数据行，从第二行开始
+    let rowIndex = 2
     sizes.value.forEach(size => {
       const row = worksheet.getRow(rowIndex)
       row.getCell(1).value = size.name
@@ -708,7 +920,7 @@ const exportTable = async () => {
     // 添加总计行
     const totalRow = worksheet.getRow(rowIndex)
     totalRow.getCell(1).value = '总计'
-    totalRow.getCell(2).value = `总耗料为=${totalMaterials.value}`
+    totalRow.getCell(2).value = `来料: ${incomingMaterials.value} | 用料: ${totalMaterials.value} | 余料: ${remainingMaterials.value}`
     totalRow.fill = {
       type: 'pattern',
       pattern: 'solid',
@@ -794,7 +1006,6 @@ const setQuantityInputRef = (el, sizeIndex, modelIndex) => {
       const input = el.$el?.querySelector('input')
       if (input) {
         input.focus()
-        input.select()
       }
     })
   }
@@ -814,7 +1025,7 @@ const handleQuantityCellClick = (size, modelIndex) => {
 
 // 生产计划相关数据
 const productionPlans = ref([])
-const planDate = ref('')
+const planDate = ref(new Date().toISOString().split('T')[0])
 const planName = ref('')
 
 // 模板类型名称映射
@@ -885,6 +1096,21 @@ const calculatePlanTotalQuantity = (plan) => {
   return total
 }
 
+// 获取计划的尺码详情，用于悬停提示
+const getPlanSizeDetails = (plan) => {
+  const sizes = plan.sizes_data || plan.sizes || []
+  if (sizes.length === 0) {
+    return '暂无尺码数据'
+  }
+  
+  const details = sizes.map(size => {
+    const quantity = size.quantities && size.quantities.length > 0 ? size.quantities[0] : 0
+    return `${size.name}: ${quantity}`
+  }).join('\n')
+  
+  return details
+}
+
 // 保存当前表格为计划
 const saveCurrentPlan = async () => {
   if (!planDate.value) {
@@ -895,16 +1121,23 @@ const saveCurrentPlan = async () => {
     ElMessage.warning('请至少添加一个型号')
     return
   }
+  if (!models.value[0].color) {
+    ElMessage.warning('请选择布料')
+    return
+  }
   
   // 获取当前模板类型名称
   const typeName = templateTypeNames[currentTemplate.value] || currentTemplate.value
-  // 使用第一个型号的名称作为计划名称
-  const modelName = models.value[0].name || typeName
+  // 生成计划名称，格式为：F116 军绿 xxx布
+  const model = models.value[0]
+  const clothName = model.color || '未知布料'
+  const modelName = model.name || typeName
+  const planName = `${modelName} ${clothName}`
   
   const planData = {
     date: planDate.value,
     plan_type: typeName,
-    name: modelName,
+    name: planName,
     factory_id: selectedFactory.value,
     template: currentTemplate.value,
     models_data: JSON.parse(JSON.stringify(models.value)),
@@ -914,6 +1147,14 @@ const saveCurrentPlan = async () => {
   try {
     const response = await axios.post('http://127.0.0.1:9876/api/production-plan-details/', planData)
     productionPlans.value.push(response.data)
+    
+    // 更新布料库存，将余料返回库存
+    const clothName = models.value[0].color
+    const remainingQty = parseFloat(remainingMaterials.value)
+    if (clothName && !isNaN(remainingQty)) {
+      await updateClothInventory(clothName, remainingQty)
+    }
+    
     ElMessage.success('计划保存成功')
   } catch (error) {
     console.error('保存计划失败:', error)
@@ -924,6 +1165,14 @@ const saveCurrentPlan = async () => {
         // 刷新令牌成功后重试
         const response = await axios.post('http://127.0.0.1:9876/api/production-plan-details/', planData)
         productionPlans.value.push(response.data)
+        
+        // 更新布料库存，将余料返回库存
+        const clothName = models.value[0].color
+        const remainingQty = parseFloat(remainingMaterials.value)
+        if (clothName && !isNaN(remainingQty)) {
+          await updateClothInventory(clothName, remainingQty)
+        }
+        
         ElMessage.success('计划保存成功')
         return
       }
@@ -1132,23 +1381,18 @@ const saveMaterial = () => {
     return
   }
 
-  if (editingMaterial.value.id) {
-    // 编辑现有耗料
-    const index = materials.value.findIndex(m => m.id === editingMaterial.value.id)
-    if (index !== -1) {
-      materials.value[index] = { ...editingMaterial.value }
-      ElMessage.success('耗料数据更新成功')
-    }
-  } else {
-    // 添加新耗料
-    const newMaterial = {
-      id: Date.now(),
-      ...editingMaterial.value
-    }
-    materials.value.push(newMaterial)
-    ElMessage.success('耗料数据添加成功')
+  // 找到对应的模板键
+  const templateKey = Object.keys(templateTypeNames).find(key => templateTypeNames[key] === editingMaterial.value.template) || editingMaterial.value.template
+  
+  // 确保模板数据存在
+  if (!templatesData[templateKey]) {
+    templatesData[templateKey] = {}
   }
-
+  
+  // 更新模板数据
+  templatesData[templateKey][editingMaterial.value.size] = parseFloat(editingMaterial.value.materialPerSet)
+  
+  ElMessage.success('耗料数据更新成功')
   materialEditVisible.value = false
 }
 
@@ -1163,7 +1407,11 @@ const deleteMaterial = (materialId) => {
       type: 'warning'
     }
   ).then(() => {
-    materials.value = materials.value.filter(m => m.id !== materialId)
+    // 从materialId中提取模板键和尺码
+    const [templateKey, size] = materialId.split('-')
+    if (templatesData[templateKey]) {
+      delete templatesData[templateKey][size]
+    }
     ElMessage.success('耗料数据删除成功')
   }).catch(() => {
     // 取消删除
@@ -1188,6 +1436,10 @@ onMounted(() => {
   fetchFactories()
   // 获取生产计划列表
   fetchProductionPlans()
+  // 获取可用布料
+  fetchAvailableColors()
+  // 加载布料库存
+  loadClothInventory()
 })
 </script>
 
@@ -1351,6 +1603,11 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   gap: 10px;
+}
+
+.model-name {
+  font-weight: bold;
+  font-size: 14px;
 }
 
 .model-name-input {
@@ -1778,6 +2035,10 @@ html body.dark-mode .model-header {
   color: #e0e0e0 !important;
 }
 
+html body.dark-mode .model-name {
+  color: #e0e0e0 !important;
+}
+
 html body.dark-mode .model-name-input {
   background-color: #2d2d2d !important;
   border-color: #444 !important;
@@ -1828,22 +2089,6 @@ html body.dark-mode .el-button--danger {
 html body.dark-mode .el-button--danger:hover {
   background-color: #f78989 !important;
   border-color: #f78989 !important;
-  color: #fff !important;
-}
-
-html body.dark-mode .el-radio-button__inner {
-  background-color: #2d2d2d !important;
-  border-color: #444 !important;
-  color: #e0e0e0 !important;
-}
-
-html body.dark-mode .el-radio-button__inner:hover {
-  color: #409EFF !important;
-}
-
-html body.dark-mode .el-radio-button.is-active .el-radio-button__inner {
-  background-color: #409EFF !important;
-  border-color: #409EFF !important;
   color: #fff !important;
 }
 

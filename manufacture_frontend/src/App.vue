@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { PieChart, OfficeBuilding, Box, Refresh, Goods, Moon, Sunny, HomeFilled, User, SwitchButton } from '@element-plus/icons-vue'
+import { PieChart, OfficeBuilding, Box, Refresh, Goods, Moon, Sunny, HomeFilled, User, SwitchButton, Wallet } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -17,7 +17,12 @@ const activeMenu = computed(() => {
 
 // 切换菜单
 const handleMenuClick = (key) => {
-  router.push('/' + key)
+  // 确保key是字符串且不是client:510这样的错误格式
+  if (typeof key === 'string' && !key.includes(':')) {
+    router.push('/' + key)
+  } else {
+    console.error('Invalid menu key:', key)
+  }
 }
 
 // 切换暗黑模式
@@ -70,13 +75,17 @@ const handleLogout = async () => {
             <el-icon><OfficeBuilding /></el-icon>
             <span>工厂管理</span>
           </el-menu-item>
-          <el-menu-item index="material">
-            <el-icon><Box /></el-icon>
-            <span>原料管理</span>
+          <el-menu-item index="supplies">
+            <el-icon><Wallet /></el-icon>
+            <span>辅料面料</span>
           </el-menu-item>
           <el-menu-item index="product">
             <el-icon><Goods /></el-icon>
             <span>产品管理</span>
+          </el-menu-item>
+          <el-menu-item index="material">
+            <el-icon><Box /></el-icon>
+            <span>材料溯源</span>
           </el-menu-item>
           <el-menu-item index="production">
             <el-icon><Refresh /></el-icon>
@@ -84,7 +93,7 @@ const handleLogout = async () => {
           </el-menu-item>
           <el-menu-item index="warehouse">
             <el-icon><HomeFilled /></el-icon>
-            <span>工厂仓库</span>
+            <span>计划出库</span>
           </el-menu-item>
           <el-menu-item index="outbound">
             <el-icon><Goods /></el-icon>
