@@ -32,9 +32,9 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
-    path: '/outbound',
-    name: 'Outbound',
-    component: () => import('../components/outbound.vue'),
+    path: '/transfer',
+    name: 'Transfer',
+    component: () => import('../components/transfer.vue'),
     meta: { requiresAuth: true }
   },
   {
@@ -59,6 +59,12 @@ const routes = [
     path: '/material',
     name: 'Material',
     component: () => import('../components/material.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/ai-summary',
+    name: 'AiSummary',
+    component: () => import('../components/AiSummary.vue'),
     meta: { requiresAuth: true }
   }
 ]

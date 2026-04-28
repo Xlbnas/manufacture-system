@@ -5,6 +5,27 @@ import axios from 'axios'
 // 配置 axios 实例
 axios.defaults.withCredentials = true
 
+const REFRESH_TOKEN_KEY = 'refresh_token'
+
+const saveRefreshToken = (token, rememberMe) => {
+  if (rememberMe) {
+    localStorage.setItem(REFRESH_TOKEN_KEY, token)
+    sessionStorage.removeItem(REFRESH_TOKEN_KEY)
+  } else {
+    sessionStorage.setItem(REFRESH_TOKEN_KEY, token)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
+  }
+}
+
+const getStoredRefreshToken = () => (
+  localStorage.getItem(REFRESH_TOKEN_KEY) || sessionStorage.getItem(REFRESH_TOKEN_KEY)
+)
+
+const clearStoredRefreshToken = () => {
+  localStorage.removeItem(REFRESH_TOKEN_KEY)
+  sessionStorage.removeItem(REFRESH_TOKEN_KEY)
+}
+
 export const useAuthStore = defineStore('auth', () => {
   // State
   const user = ref(null)
@@ -27,8 +48,8 @@ export const useAuthStore = defineStore('auth', () => {
       // 设置 axios 默认请求头
       setAuthHeader(response.data.access)
 
-      // 保存刷新令牌
-      localStorage.setItem('refresh_token', response.data.refresh)
+      // 记住我时持久化到 localStorage，否则仅当前会话有效
+      saveRefreshToken(response.data.refresh, rememberMe)
 
       return { success: true, message: '登录成功' }
     } catch (error) {
@@ -42,7 +63,7 @@ export const useAuthStore = defineStore('auth', () => {
   const logout = async () => {
     try {
       // 清除本地存储的令牌
-      localStorage.removeItem('refresh_token')
+      clearStoredRefreshToken()
     } catch (error) {
       console.error('Logout error:', error)
     } finally {
@@ -59,7 +80,7 @@ export const useAuthStore = defineStore('auth', () => {
       return refreshPromise
     }
 
-    const refreshToken = localStorage.getItem('refresh_token')
+    const refreshToken = getStoredRefreshToken()
     if (!refreshToken) {
       return { success: false }
     }
@@ -78,7 +99,7 @@ export const useAuthStore = defineStore('auth', () => {
         // 刷新失败，清除登录状态
         user.value = null
         accessToken.value = null
-        localStorage.removeItem('refresh_token')
+        clearStoredRefreshToken()
         delete axios.defaults.headers.common['Authorization']
         return { success: false }
       })
@@ -110,7 +131,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   const initAuth = async () => {
-    // 尝试刷新令牌（如果存在 refresh token cookie）
+    // 启动时尝试用已存储 refresh token 恢复会话
     const result = await refreshToken()
     if (result.success) {
       await fetchUserInfo()

@@ -18,7 +18,7 @@
         <div ref="chartContainer2" class="chart-container"></div>
       </div>
       <div class="chart-item">
-        <div class="chart-header">出库趋势</div>
+        <div class="chart-header">调拨趋势</div>
         <div ref="chartContainer3" class="chart-container"></div>
       </div>
     </div>
@@ -55,10 +55,10 @@
             </el-table-column>
           </el-table>
         </el-tab-pane>
-        <el-tab-pane label="出库趋势" name="outbound">
+        <el-tab-pane label="调拨趋势" name="transfer">
           <el-table :data="outboundData" style="width: 100%">
             <el-table-column prop="month" label="月份" width="100" />
-            <el-table-column prop="value" label="出库数量">
+            <el-table-column prop="value" label="调拨数量">
               <template #default="scope">
                 <el-input v-model.number="scope.row.value" type="number" />
               </template>
@@ -143,7 +143,7 @@
 
 <script>
 import * as echarts from 'echarts'
-import axios from 'axios'
+import api from '../utils/axios'
 import * as ExcelJS from 'exceljs'
 import { Check, Close } from '@element-plus/icons-vue'
 
@@ -311,10 +311,10 @@ export default {
         }
       }
       
-      // 验证出库趋势数据
+      // 验证调拨趋势数据
       for (const item of this.outboundData) {
         if (isNaN(item.value) || item.value < 0) {
-          alert('出库趋势数据格式错误，请检查出库数量');
+          alert('调拨趋势数据格式错误，请检查调拨数量');
           return false
         }
       }
@@ -760,13 +760,13 @@ export default {
 
       try {
         // 获取所有数据
-        const [factories, products, warehouse, outboundRecords, productionPlans, materials] = await Promise.all([
-          axios.get('http://127.0.0.1:9876/api/factories/'),
-          axios.get('http://127.0.0.1:9876/api/products/'),
-          axios.get('http://127.0.0.1:9876/api/warehouse/'),
-          axios.get('http://127.0.0.1:9876/api/outbound-records/'),
-          axios.get('http://127.0.0.1:9876/api/production-plan-details/'),
-          axios.get('http://127.0.0.1:9876/api/materials/')
+        const [factories, products, warehouse, transferOrders, productionPlans, materials] = await Promise.all([
+          api.get('/factories/'),
+          api.get('/products/'),
+          api.get('/warehouse/'),
+          api.get('/transfer-orders/'),
+          api.get('/production-plan-details/'),
+          api.get('/materials/')
         ])
 
         this.backupProgress = 30
@@ -827,24 +827,22 @@ export default {
 
         this.backupProgress = 90
 
-        // 添加出库记录
-        const outboundWorksheet = workbook.addWorksheet('出库记录')
+        // 添加调拨记录
+        const outboundWorksheet = workbook.addWorksheet('调拨记录')
         outboundWorksheet.columns = [
-          { header: '日期', key: 'outbound_date', width: 15 },
-          { header: '仓库', key: 'warehouse', width: 20 },
-          { header: '产品', key: 'product', width: 20 },
-          { header: '颜色', key: 'color', width: 12 },
-          { header: '尺码', key: 'size', width: 12 },
-          { header: '数量', key: 'quantity', width: 10 }
+          { header: '编号', key: 'id', width: 10 },
+          { header: '源仓', key: 'from_warehouse', width: 20 },
+          { header: '目标仓', key: 'to_warehouse', width: 20 },
+          { header: '状态', key: 'status', width: 12 },
+          { header: '创建时间', key: 'created_at', width: 22 }
         ]
-        outboundRecords.data.forEach(item => {
+        transferOrders.data.forEach(item => {
           outboundWorksheet.addRow({
-            outbound_date: item.outbound_date,
-            warehouse: item.warehouse,
-            product: item.product?.name || item.product,
-            color: item.color || '',
-            size: item.size || '',
-            quantity: item.quantity
+            id: item.id,
+            from_warehouse: item.from_warehouse?.name || '',
+            to_warehouse: item.to_warehouse?.name || '',
+            status: item.status || '',
+            created_at: item.created_at || ''
           })
         })
 
@@ -970,7 +968,7 @@ export default {
             fontSize: 12,
             formatter: function(params) {
               return params[0].name + '<br/>' +
-                     params[0].marker + '出库数量: ' + params[0].value;
+                     params[0].marker + '调拨数量: ' + params[0].value;
             },
             position: function(point, params, dom, rect, size) {
               // 确保提示框跟随鼠标位置，同时避免溢出
@@ -999,7 +997,7 @@ export default {
             }
           },
           legend: {
-            data: ['出库数量'],
+            data: ['调拨数量'],
             textStyle: {
               color: isDark ? '#e0e0e0' : '#333'
             },
@@ -1056,7 +1054,7 @@ export default {
           ],
           series: [
             {
-              name: '出库数量',
+              name: '调拨数量',
               data: values,
               type: 'line',
               smooth: true,
@@ -1223,7 +1221,7 @@ export default {
 }
 
 :deep(.dark-mode .dashboard-header h2) {
-  color: #333 !important;
+  color: #e8eaed !important;
   font-weight: bold !important;
   font-size: 24px !important;
   margin: 0 !important;
@@ -1240,9 +1238,9 @@ export default {
 }
 
 :deep(.dark-mode .chart-header) {
-  background: #f2f2f2 !important;
+  background: #2a2d33 !important;
   border-bottom-color: var(--border-color) !important;
-  color: #333 !important;
+  color: #f2f3f5 !important;
   font-weight: bold !important;
 }
 
@@ -1425,5 +1423,14 @@ export default {
   background-color: rgba(245, 108, 108, 0.1);
   border-color: rgba(245, 108, 108, 0.3);
   color: #f56c6c;
+}
+</style>
+
+<style>
+/* 暗黑模式兜底：确保首页图表标题可读 */
+.dark-mode .dashboard .chart-header {
+  background: #2a2d33 !important;
+  color: #f2f3f5 !important;
+  border-bottom-color: #4a4f58 !important;
 }
 </style>

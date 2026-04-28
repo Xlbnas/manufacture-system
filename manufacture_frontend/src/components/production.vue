@@ -611,15 +611,24 @@ const updateMaterialData = (row) => {
 // 布料库存数据
 const clothInventory = ref({})
 
-// 加载染色布库存
+const extractMaterials = (payload) => {
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload?.results)) return payload.results
+  return []
+}
+
+// 加载染色布库存（仅统计染色布可用库存）
 const loadClothInventory = async () => {
   try {
     const response = await axios.get('http://127.0.0.1:9876/api/materials/')
-    const materials = response.data
+    const materials = extractMaterials(response.data)
     const inventory = {}
     materials.forEach(material => {
-      if (material.type === '面料') {
-        inventory[material.name] = material.quantity || 0
+      if (material.type === 'dyed_fabric') {
+        const color = (material.color || '').trim()
+        const quantity = Number(material.quantity) || 0
+        if (!color || quantity <= 0) return
+        inventory[color] = (inventory[color] || 0) + quantity
       }
     })
     clothInventory.value = inventory
@@ -632,11 +641,14 @@ const loadClothInventory = async () => {
         // 刷新令牌成功后重试
         try {
           const response = await axios.get('http://127.0.0.1:9876/api/materials/')
-          const materials = response.data
+          const materials = extractMaterials(response.data)
           const inventory = {}
           materials.forEach(material => {
-            if (material.type === '面料') {
-              inventory[material.name] = material.quantity || 0
+            if (material.type === 'dyed_fabric') {
+              const color = (material.color || '').trim()
+              const quantity = Number(material.quantity) || 0
+              if (!color || quantity <= 0) return
+              inventory[color] = (inventory[color] || 0) + quantity
             }
           })
           clothInventory.value = inventory
@@ -653,8 +665,8 @@ const incomingMaterials = computed(() => {
   if (models.value.length === 0 || !models.value[0].color) {
     return '0.00'
   }
-  const clothName = models.value[0].color
-  const inventory = parseFloat(clothInventory.value[clothName] || 0)
+  const clothColor = models.value[0].color
+  const inventory = parseFloat(clothInventory.value[clothColor] || 0)
   return inventory.toFixed(2)
 })
 
@@ -676,7 +688,7 @@ const updateClothInventory = async (clothName, quantity) => {
     // 查找对应的染色布材料
     const response = await axios.get('http://127.0.0.1:9876/api/materials/')
     const materials = response.data
-    const clothMaterial = materials.find(m => m.type === '面料' && m.name === clothName)
+    const clothMaterial = materials.find(m => m.type === 'dyed_fabric' && m.color === clothName)
     
     if (clothMaterial) {
       // 更新库存，确保quantity是数字类型
@@ -703,7 +715,7 @@ const updateClothInventory = async (clothName, quantity) => {
         try {
           const response = await axios.get('http://127.0.0.1:9876/api/materials/')
           const materials = response.data
-          const clothMaterial = materials.find(m => m.type === '面料' && m.name === clothName)
+          const clothMaterial = materials.find(m => m.type === 'dyed_fabric' && m.color === clothName)
           
           if (clothMaterial) {
             // 更新库存，确保quantity是数字类型
@@ -811,14 +823,13 @@ const changeTemplate = () => {
 const fetchAvailableColors = async () => {
   try {
     const response = await axios.get('http://127.0.0.1:9876/api/materials/')
-    const materials = response.data
-    // 提取所有染色布（面料）类型的名称
+    const materials = extractMaterials(response.data)
     const cloths = new Set()
     materials.forEach(material => {
-      if (material.type === '面料') {
-        if (material.name) {
-          cloths.add(material.name)
-        }
+      const color = (material.color || '').trim()
+      const quantity = Number(material.quantity) || 0
+      if (material.type === 'dyed_fabric' && color && quantity > 0) {
+        cloths.add(color)
       }
     })
     availableColors.value = Array.from(cloths)
@@ -831,30 +842,26 @@ const fetchAvailableColors = async () => {
         // 刷新令牌成功后重试
         try {
           const response = await axios.get('http://127.0.0.1:9876/api/materials/')
-          const materials = response.data
-          // 提取所有染色布（面料）类型的名称
+          const materials = extractMaterials(response.data)
           const cloths = new Set()
           materials.forEach(material => {
-            if (material.type === '面料') {
-              if (material.name) {
-                cloths.add(material.name)
-              }
+            const color = (material.color || '').trim()
+            const quantity = Number(material.quantity) || 0
+            if (material.type === 'dyed_fabric' && color && quantity > 0) {
+              cloths.add(color)
             }
           })
           availableColors.value = Array.from(cloths)
           return
         } catch (retryError) {
           console.error('重试获取染色布选项失败:', retryError)
-          // 如果重试失败，使用默认布料选项
-          availableColors.value = ['80/20布']
+          availableColors.value = []
         }
       } else {
-        // 如果刷新令牌失败，使用默认布料选项
-        availableColors.value = ['80/20布']
+        availableColors.value = []
       }
     } else {
-      // 如果其他错误，使用默认布料选项
-      availableColors.value = ['80/20布']
+      availableColors.value = []
     }
   }
 }
@@ -2119,5 +2126,133 @@ html body.dark-mode .production-table :deep(tr):nth-child(odd):not(.total-row) {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+</style>
+
+<style>
+/* 生产页暗黑模式全局兜底（旧 scoped 选择器失效时生效） */
+.dark-mode .production-container {
+  color: #e0e0e0;
+}
+
+.dark-mode .production-header {
+  border-bottom-color: #444 !important;
+}
+
+.dark-mode .production-header h2,
+.dark-mode .section-header h3,
+.dark-mode .template-left h4,
+.dark-mode .template-center h4,
+.dark-mode .template-right h4,
+.dark-mode .model-name {
+  color: #f2f3f5 !important;
+}
+
+.dark-mode .color-control {
+  background-color: #2d2d2d !important;
+  border: 1px solid #444 !important;
+}
+
+.dark-mode .production-table th {
+  background-color: #4caf50 !important;
+  color: #fff !important;
+}
+
+.dark-mode .production-table td {
+  border-color: #444 !important;
+  color: #e0e0e0 !important;
+}
+
+.dark-mode .production-table tbody tr:nth-child(even) {
+  background-color: #2d2d2d !important;
+}
+
+.dark-mode .production-table tbody tr:nth-child(odd):not(.total-row) {
+  background-color: #1a1a1a !important;
+}
+
+.dark-mode .total-row {
+  background-color: #ffb300 !important;
+}
+
+.dark-mode .total-row td,
+.dark-mode .total-row td * {
+  color: #111 !important;
+  font-weight: 700 !important;
+}
+
+.dark-mode .zoom-controls {
+  background-color: #2a2d33 !important;
+  border-color: #4a4f58 !important;
+}
+
+.dark-mode .zoom-level {
+  color: #f2f3f5 !important;
+}
+
+.dark-mode .production-plans-section {
+  background-color: #1a1a1a !important;
+}
+
+.dark-mode .plan-card {
+  background-color: #2d2d2d !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+.dark-mode .plan-header {
+  border-bottom-color: #444 !important;
+}
+
+.dark-mode .plan-title,
+.dark-mode .date-header,
+.dark-mode .type-header,
+.dark-mode .plan-summary {
+  color: #e0e0e0 !important;
+}
+
+.dark-mode .date-header {
+  background-color: #2d2d2d !important;
+  border-left-color: #409eff !important;
+}
+
+.dark-mode .type-header {
+  background-color: #3d3d3d !important;
+  border-left-color: #67c23a !important;
+}
+
+.dark-mode .plan-models,
+.dark-mode .plan-total {
+  background-color: #3d3d3d !important;
+  color: #ccc !important;
+}
+
+.dark-mode .production-container .el-select__wrapper {
+  background-color: #30343d !important;
+  box-shadow: 0 0 0 1px #4a4f58 inset !important;
+}
+
+.dark-mode .production-container .el-select__selected-item,
+.dark-mode .production-container .el-select__placeholder,
+.dark-mode .production-container .el-select__input-wrapper,
+.dark-mode .production-container .el-select__input,
+.dark-mode .production-container .el-input__inner {
+  color: #f2f3f5 !important;
+}
+
+.dark-mode .production-container .el-input__wrapper {
+  background-color: #30343d !important;
+  box-shadow: 0 0 0 1px #4a4f58 inset !important;
+}
+
+.dark-mode .production-container .el-radio-button__inner {
+  background-color: #353a44 !important;
+  border-color: #4a4f58 !important;
+  color: #f2f3f5 !important;
+}
+
+.dark-mode .production-container .el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background-color: #409eff !important;
+  border-color: #409eff !important;
+  color: #fff !important;
 }
 </style>

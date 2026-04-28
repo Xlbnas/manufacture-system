@@ -1,7 +1,7 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { PieChart, OfficeBuilding, Box, Refresh, Goods, Moon, Sunny, HomeFilled, User, SwitchButton, Wallet } from '@element-plus/icons-vue'
+import { PieChart, OfficeBuilding, Box, Refresh, Goods, Moon, Sunny, HomeFilled, User, SwitchButton, Wallet, ChatDotRound } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -9,6 +9,7 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const darkMode = ref(false)
+const THEME_STORAGE_KEY = 'theme_mode'
 
 // 计算当前激活的菜单
 const activeMenu = computed(() => {
@@ -33,6 +34,17 @@ const toggleDarkMode = () => {
   } else {
     document.documentElement.classList.remove('dark-mode')
   }
+  localStorage.setItem(THEME_STORAGE_KEY, darkMode.value ? 'dark' : 'light')
+}
+
+const applyThemeFromStorage = () => {
+  const savedTheme = localStorage.getItem(THEME_STORAGE_KEY)
+  if (savedTheme === 'dark' || savedTheme === 'light') {
+    darkMode.value = savedTheme === 'dark'
+  } else {
+    darkMode.value = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+  }
+  document.documentElement.classList.toggle('dark-mode', darkMode.value)
 }
 
 // 登出
@@ -55,6 +67,10 @@ const handleLogout = async () => {
     // 用户取消
   }
 }
+
+onMounted(() => {
+  applyThemeFromStorage()
+})
 </script>
 
 <template>
@@ -93,11 +109,15 @@ const handleLogout = async () => {
           </el-menu-item>
           <el-menu-item index="warehouse">
             <el-icon><HomeFilled /></el-icon>
-            <span>计划出库</span>
+            <span>双仓库存</span>
           </el-menu-item>
-          <el-menu-item index="outbound">
-            <el-icon><Goods /></el-icon>
-            <span>出库管理</span>
+          <el-menu-item index="transfer">
+            <el-icon><Refresh /></el-icon>
+            <span>仓间调拨</span>
+          </el-menu-item>
+          <el-menu-item index="ai-summary">
+            <el-icon><ChatDotRound /></el-icon>
+            <span>AI总结</span>
           </el-menu-item>
         </el-menu>
       </el-aside>
@@ -232,10 +252,38 @@ html, body {
 .dark-mode .el-input__wrapper {
   background-color: var(--card-bg);
   border-color: var(--border-color);
+  box-shadow: 0 0 0 1px var(--border-color) inset !important;
 }
 
 .dark-mode .el-input__inner {
   color: var(--text-color);
+  background-color: transparent !important;
+}
+
+.dark-mode .el-textarea__inner {
+  background-color: #30343d !important;
+  color: #f2f3f5 !important;
+  border-color: #4a4f58 !important;
+  box-shadow: 0 0 0 1px #4a4f58 inset !important;
+}
+
+.dark-mode .el-textarea__inner:focus {
+  border-color: #66b1ff !important;
+  box-shadow: 0 0 0 1px #66b1ff inset !important;
+}
+
+.dark-mode .el-select__wrapper {
+  background-color: #30343d !important;
+  box-shadow: 0 0 0 1px #4a4f58 inset !important;
+}
+
+.dark-mode .el-select__wrapper.is-hovering {
+  box-shadow: 0 0 0 1px #6b7280 inset !important;
+  background-color: #353a44 !important;
+}
+
+.dark-mode .el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px #66b1ff inset !important;
 }
 
 .dark-mode .el-dialog {
@@ -254,6 +302,147 @@ html, body {
 
 .dark-mode .el-form-item__label {
   color: var(--text-color);
+}
+
+.dark-mode .el-tabs__header {
+  border-bottom-color: var(--border-color) !important;
+}
+
+.dark-mode .el-tabs__item {
+  color: #b8beca !important;
+}
+
+.dark-mode .el-tabs__item:hover {
+  color: #e8eaed !important;
+}
+
+.dark-mode .el-tabs__item.is-active {
+  color: #66b1ff !important;
+}
+
+.dark-mode .el-tabs__active-bar {
+  background-color: #66b1ff !important;
+}
+
+.dark-mode .el-tabs__nav-wrap::after {
+  background-color: var(--border-color) !important;
+}
+
+.dark-mode .el-select__placeholder,
+.dark-mode .el-select__selected-item,
+.dark-mode .el-select__input {
+  color: #e8eaed !important;
+}
+
+.dark-mode .el-input__inner::placeholder,
+.dark-mode .el-textarea__inner::placeholder,
+.dark-mode .el-select__placeholder {
+  color: #b5bcc8 !important;
+}
+
+.dark-mode .el-table__row:hover > td {
+  background-color: #343842 !important;
+  color: #f2f3f5 !important;
+}
+
+.dark-mode .el-select .el-tag {
+  background-color: #4a505c !important;
+  border-color: #5a6270 !important;
+  color: #f5f7fa !important;
+}
+
+.dark-mode .el-select .el-tag .el-tag__close {
+  color: #d8dee9 !important;
+}
+
+.dark-mode .el-select .el-tag .el-tag__close:hover {
+  background-color: #6b7280 !important;
+  color: #ffffff !important;
+}
+
+/* Alert 全局暗黑模式适配（强覆盖，避免组件作用域失效） */
+.dark-mode .el-alert.is-light {
+  border-color: #4a4f58 !important;
+}
+
+.dark-mode .el-alert--info.is-light {
+  background-color: rgba(64, 158, 255, 0.14) !important;
+  border-color: rgba(64, 158, 255, 0.35) !important;
+}
+
+.dark-mode .el-alert--info .el-alert__title,
+.dark-mode .el-alert--info .el-alert__description {
+  color: #9ecfff !important;
+}
+
+.dark-mode .el-alert--success.is-light {
+  background-color: rgba(103, 194, 58, 0.14) !important;
+  border-color: rgba(103, 194, 58, 0.35) !important;
+}
+
+.dark-mode .el-alert--success .el-alert__title,
+.dark-mode .el-alert--success .el-alert__description {
+  color: #b3e19d !important;
+}
+
+.dark-mode .el-alert--warning.is-light {
+  background-color: rgba(230, 162, 60, 0.14) !important;
+  border-color: rgba(230, 162, 60, 0.35) !important;
+}
+
+.dark-mode .el-alert--warning .el-alert__title,
+.dark-mode .el-alert--warning .el-alert__description {
+  color: #f3d19e !important;
+}
+
+.dark-mode .el-alert--error.is-light {
+  background-color: rgba(245, 108, 108, 0.14) !important;
+  border-color: rgba(245, 108, 108, 0.35) !important;
+}
+
+.dark-mode .el-alert--error .el-alert__title,
+.dark-mode .el-alert--error .el-alert__description {
+  color: #fab6b6 !important;
+}
+
+/* Select 下拉面板（popper）暗色统一 */
+.dark-mode .el-select-dropdown,
+.dark-mode .el-popper.is-light {
+  background-color: #2b3038 !important;
+  border-color: #4a4f58 !important;
+}
+
+.dark-mode .el-select-dropdown__item {
+  color: #e8eaed !important;
+  background-color: transparent !important;
+}
+
+.dark-mode .el-select-dropdown__item.hover,
+.dark-mode .el-select-dropdown__item:hover {
+  background-color: #3a404b !important;
+  color: #ffffff !important;
+}
+
+.dark-mode .el-select-dropdown__item.is-selected {
+  background-color: rgba(102, 177, 255, 0.18) !important;
+  color: #8cc5ff !important;
+}
+
+.dark-mode .el-select-dropdown__empty {
+  color: #b5bcc8 !important;
+}
+
+.dark-mode .el-select-dropdown__wrap::-webkit-scrollbar {
+  width: 8px;
+}
+
+.dark-mode .el-select-dropdown__wrap::-webkit-scrollbar-thumb {
+  background-color: #4a4f58;
+  border-radius: 6px;
+}
+
+.dark-mode .el-select-dropdown__wrap::-webkit-scrollbar-track {
+  background-color: #2b3038;
 }
 
 .dark-mode .main {
@@ -344,12 +533,6 @@ html, body {
 /* 修复:before伪元素样式 */
 .dark-mode .el-table__inner-wrapper:before {
   background-color: var(--bg-color) !important;
-}
-
-.dark-mode *:before {
-  background-color: var(--bg-color) !important;
-  border-color: var(--border-color) !important;
-  color: var(--text-color) !important;
 }
 </style>
 

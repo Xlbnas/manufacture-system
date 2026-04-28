@@ -1,81 +1,136 @@
+from decimal import Decimal
+
+from django.core.exceptions import ValidationError
 from django.db import models
-from django.utils import timezone
+
 
 class Factory(models.Model):
     name = models.CharField(max_length=100, verbose_name='工厂名称')
     location = models.CharField(max_length=100, verbose_name='地区')
     workshop = models.CharField(max_length=50, verbose_name='车间')
-    
+
     def __str__(self):
         return f'{self.location}{self.workshop}'
-    
+
     class Meta:
         verbose_name = '工厂'
         verbose_name_plural = '工厂'
 
+
 class Supplier(models.Model):
     SUPPLIER_TYPE_CHOICES = (
         ('辅料', '辅料'),
-        ('面料', '面料'),
+        ('坯布', '坯布'),
+        ('染厂', '染厂'),
     )
     name = models.CharField(max_length=100, verbose_name='供应商名称')
     type = models.CharField(max_length=10, choices=SUPPLIER_TYPE_CHOICES, verbose_name='供应商类型')
-    
+
     def __str__(self):
         return self.name
-    
+
     class Meta:
         verbose_name = '供应商'
         verbose_name_plural = '供应商'
 
+
+class WarehouseNode(models.Model):
+    WAREHOUSE_TYPE_CHOICES = (
+        ('factory', '工厂仓'),
+        ('local', '本地仓'),
+    )
+    name = models.CharField(max_length=100, verbose_name='仓库名称', unique=True)
+    warehouse_type = models.CharField(max_length=20, choices=WAREHOUSE_TYPE_CHOICES, verbose_name='仓库类型')
+    factory = models.ForeignKey(Factory, on_delete=models.SET_NULL, null=True, blank=True, verbose_name='所属工厂')
+    is_active = models.BooleanField(default=True, verbose_name='启用')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        verbose_name = '仓库主数据'
+        verbose_name_plural = '仓库主数据'
+
+
 class Material(models.Model):
     MATERIAL_TYPE_CHOICES = (
-        ('辅料', '辅料'),
-        ('面料', '面料'),
+        ('raw_fabric', '坯布'),
+        ('dyed_fabric', '染色布'),
+        ('accessory', '辅料'),
     )
-    type = models.CharField(max_length=10, choices=MATERIAL_TYPE_CHOICES, verbose_name='原料类型')
-    name = models.CharField(max_length=100, verbose_name='原料名称')
-    quantity = models.DecimalField(max_digits=10, decimal_places=2, verbose_name='数量')
+    type = models.CharField(max_length=20, choices=MATERIAL_TYPE_CHOICES, verbose_name='物料类型')
+    name = models.CharField(max_length=100, verbose_name='物料名称')
+    color = models.CharField(max_length=50, verbose_name='颜色', blank=True, null=True)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='数量', default=Decimal('0.00'))
     unit = models.CharField(max_length=10, verbose_name='单位')
     stock_date = models.DateField(verbose_name='入库日期')
-    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, verbose_name='供应商', blank=True, null=True)
-    factory = models.ForeignKey(Factory, on_delete=models.CASCADE, verbose_name='目标工厂', blank=True, null=True)
+    supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, verbose_name='供应商', blank=True, null=True)
+    warehouse = models.ForeignKey(WarehouseNode, on_delete=models.SET_NULL, verbose_name='所属仓库', blank=True, null=True)
     attachment = models.ImageField(upload_to='material_attachments/', blank=True, null=True, verbose_name='附件')
-    
+    source_material = models.ForeignKey('self', on_delete=models.SET_NULL, blank=True, null=True, verbose_name='来源坯布')
+    remark = models.TextField(blank=True, default='', verbose_name='备注')
+
     def __str__(self):
-        return f'{self.type}-{self.name}'
-    
+        return f'{self.get_type_display()}-{self.name}'
+
     class Meta:
-        verbose_name = '原料'
-        verbose_name_plural = '原料'
+        verbose_name = '物料库存'
+        verbose_name_plural = '物料库存'
+
+
+class DyeingOrder(models.Model):
+    STATUS_CHOICES = (
+        ('draft', '草稿'),
+        ('completed', '已完成'),
+        ('cancelled', '已取消'),
+    )
+    raw_material = models.ForeignKey(Material, on_delete=models.PROTECT, related_name='dyeing_orders', verbose_name='坯布')
+    supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, related_name='dyeing_orders', verbose_name='染厂')
+    output_name = models.CharField(max_length=100, verbose_name='染色布名称')
+    output_color = models.CharField(max_length=50, verbose_name='颜色')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='数量')
+    output_warehouse = models.ForeignKey(WarehouseNode, on_delete=models.PROTECT, verbose_name='入库仓')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', verbose_name='状态')
+    dyed_material = models.ForeignKey(Material, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_by_dyeing_order')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'染色单#{self.id}'
+
+    class Meta:
+        verbose_name = '染色单'
+        verbose_name_plural = '染色单'
+
 
 class Product(models.Model):
     name = models.CharField(max_length=100, verbose_name='产品名称', unique=True)
     colors = models.CharField(max_length=200, verbose_name='颜色选项', default='')
     specifications = models.CharField(max_length=200, verbose_name='规格参数', default='')
-    
+
     def __str__(self):
         return self.name
-    
+
     class Meta:
         verbose_name = '产品'
         verbose_name_plural = '产品'
+
 
 class ProductionPlan(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name='产品')
     quantity = models.IntegerField(verbose_name='计划数量')
     start_date = models.DateField(verbose_name='开始日期')
     expected_end_date = models.DateField(verbose_name='预计结束日期')
-    
+
     def __str__(self):
         return f'{self.product}-{self.quantity}'
-    
+
     class Meta:
         verbose_name = '生产计划'
         verbose_name_plural = '生产计划'
 
+
 class ProductionPlanDetail(models.Model):
-    """详细生产计划模型，用于存储前端生产计划表格数据"""
     date = models.DateField(verbose_name='计划日期')
     plan_type = models.CharField(max_length=50, verbose_name='计划类型')
     name = models.CharField(max_length=200, verbose_name='计划名称')
@@ -85,14 +140,15 @@ class ProductionPlanDetail(models.Model):
     sizes_data = models.JSONField(verbose_name='尺码数据', default=list)
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
-    
+
     def __str__(self):
         return f'{self.date}-{self.name}'
-    
+
     class Meta:
         verbose_name = '生产计划明细'
         verbose_name_plural = '生产计划明细'
         ordering = ['-date', '-created_at']
+
 
 class ProductionProgress(models.Model):
     STATUS_CHOICES = (
@@ -104,39 +160,65 @@ class ProductionProgress(models.Model):
     current_quantity = models.IntegerField(verbose_name='当前数量')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, verbose_name='状态')
     update_time = models.DateTimeField(auto_now=True, verbose_name='更新时间')
-    
+
     def __str__(self):
         return f'{self.plan}-{self.current_quantity}'
-    
+
     class Meta:
         verbose_name = '生产进度'
         verbose_name_plural = '生产进度'
 
-class OutboundRecord(models.Model):
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name='产品')
-    color = models.CharField(max_length=50, verbose_name='颜色', blank=True, null=True)
-    size = models.CharField(max_length=50, verbose_name='尺码', blank=True, null=True)
-    quantity = models.IntegerField(verbose_name='出库数量')
-    outbound_date = models.DateField(verbose_name='出库日期')
-    warehouse = models.CharField(max_length=100, verbose_name='仓库')
-    
-    def __str__(self):
-        return f'{self.product}-{self.quantity}-{self.outbound_date}'
-    
-    class Meta:
-        verbose_name = '出库记录'
-        verbose_name_plural = '出库记录'
 
 class Warehouse(models.Model):
+    warehouse = models.ForeignKey(WarehouseNode, on_delete=models.CASCADE, related_name='stocks', verbose_name='仓库', null=True, blank=True)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, verbose_name='产品')
     color = models.CharField(max_length=50, verbose_name='颜色')
     size = models.CharField(max_length=20, verbose_name='尺码')
-    quantity = models.IntegerField(verbose_name='数量')
-    factory = models.ForeignKey(Factory, on_delete=models.CASCADE, verbose_name='工厂')
-    
+    quantity = models.IntegerField(verbose_name='数量', default=0)
+
+    def clean(self):
+        if self.quantity < 0:
+            raise ValidationError('库存不能为负数')
+
     def __str__(self):
-        return f'{self.product}-{self.color}-{self.size}-{self.quantity}'
-    
+        return f'{self.warehouse}-{self.product}-{self.color}-{self.size}-{self.quantity}'
+
     class Meta:
-        verbose_name = '仓库'
-        verbose_name_plural = '仓库'
+        verbose_name = '成品库存'
+        verbose_name_plural = '成品库存'
+        unique_together = ('warehouse', 'product', 'color', 'size')
+
+
+class TransferOrder(models.Model):
+    STATUS_CHOICES = (
+        ('draft', '草稿'),
+        ('completed', '已完成'),
+        ('cancelled', '已取消'),
+    )
+    from_warehouse = models.ForeignKey(WarehouseNode, on_delete=models.PROTECT, related_name='transfer_from_orders')
+    to_warehouse = models.ForeignKey(WarehouseNode, on_delete=models.PROTECT, related_name='transfer_to_orders')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    note = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    def __str__(self):
+        return f'调拨单#{self.id}'
+
+    class Meta:
+        verbose_name = '调拨单'
+        verbose_name_plural = '调拨单'
+
+
+class TransferOrderItem(models.Model):
+    transfer_order = models.ForeignKey(TransferOrder, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.PROTECT)
+    color = models.CharField(max_length=50)
+    size = models.CharField(max_length=20)
+    quantity = models.IntegerField()
+
+    class Meta:
+        verbose_name = '调拨单明细'
+        verbose_name_plural = '调拨单明细'
+
+

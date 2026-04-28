@@ -23,4 +23,4 @@ COPY . .
 EXPOSE 9876
 
 # 启动命令
-CMD ["gunicorn", "--bind", "0.0.0.0:9876", "manufacture_backend.wsgi:application"]
+CMD ["gunicorn", "--bind", "0.0.0.0:9876", "manufacture_project.wsgi:application"]

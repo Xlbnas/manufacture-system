@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Factory, Material, Product, ProductionPlan, ProductionProgress, OutboundRecord
+from .models import Factory, Material, Product, ProductionPlan, ProductionProgress
 
 @admin.register(Factory)
 class FactoryAdmin(admin.ModelAdmin):
@@ -30,8 +30,3 @@ class ProductionProgressAdmin(admin.ModelAdmin):
     search_fields = ('plan__product__name',)
     list_filter = ('status', 'update_time')
 
-@admin.register(OutboundRecord)
-class OutboundRecordAdmin(admin.ModelAdmin):
-    list_display = ('product', 'quantity', 'outbound_date', 'warehouse')
-    search_fields = ('product__name', 'warehouse')
-    list_filter = ('outbound_date', 'warehouse')

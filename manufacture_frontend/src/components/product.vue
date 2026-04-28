@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import axios from 'axios'
+import api from '../utils/axios'
 import { ElMessage } from 'element-plus'
 import * as ExcelJS from 'exceljs'
 import ImportComponent from './ImportComponent.vue'
@@ -48,7 +48,7 @@ onMounted(() => {
 // 数据获取
 const fetchProducts = async () => {
   try {
-    const response = await axios.get('http://127.0.0.1:9876/api/products/')
+    const response = await api.get('/products/')
     products.value = response.data
   } catch (error) {
     console.error('Error fetching products:', error)
@@ -100,7 +100,7 @@ const saveProduct = async () => {
       specifications: typeof form.value.specifications
     })
     
-    const response = await axios.post('http://127.0.0.1:9876/api/products/', form.value)
+    const response = await api.post('/products/', form.value)
     console.log('Response:', response)
     dialogVisible.value = false
     fetchProducts()
@@ -149,7 +149,7 @@ const updateProduct = async () => {
       specifications: typeof editForm.value.specifications
     })
     
-    await axios.put(`http://127.0.0.1:9876/api/products/${editForm.value.id}/`, editForm.value)
+    await api.put(`/products/${editForm.value.id}/`, editForm.value)
     editDialogVisible.value = false
     fetchProducts()
   } catch (error) {
@@ -179,7 +179,7 @@ const updateProduct = async () => {
 const deleteProduct = async (id) => {
   if (confirm('确定要删除这个产品吗？')) {
     try {
-      await axios.delete(`http://127.0.0.1:9876/api/products/${id}/`)
+      await api.delete(`/products/${id}/`)
       fetchProducts()
     } catch (error) {
       console.error('Error deleting product:', error)
@@ -276,7 +276,7 @@ const handleFileUpload = (event) => {
       try {
         const importedProducts = JSON.parse(e.target.result)
         for (const product of importedProducts) {
-          await axios.post('http://127.0.0.1:9876/api/products/', product)
+          await api.post('/products/', product)
         }
         fetchProducts()
         alert('产品数据导入成功！')
@@ -331,7 +331,7 @@ const handleImportSuccess = async (data) => {
       }
 
       // 保存数据
-      await axios.post('http://127.0.0.1:9876/api/products/', productData)
+      await api.post('/products/', productData)
       importSuccessCount.value++
     } catch (error) {
       importErrorCount.value++
@@ -498,5 +498,20 @@ const handleImportSuccess = async (data) => {
   width: 100%;
   display: flex;
   justify-content: flex-end;
+}
+
+:deep(.dark-mode .product-management .el-select__wrapper) {
+  background-color: #30343d !important;
+  box-shadow: 0 0 0 1px #4a4f58 inset !important;
+}
+
+:deep(.dark-mode .product-management .el-select__wrapper.is-hovering) {
+  box-shadow: 0 0 0 1px #6b7280 inset !important;
+}
+
+:deep(.dark-mode .product-management .el-select .el-tag) {
+  background-color: #4a505c !important;
+  border-color: #5a6270 !important;
+  color: #f2f3f5 !important;
 }
 </style>

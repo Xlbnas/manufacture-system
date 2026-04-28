@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import axios from 'axios'
+import api from '../utils/axios'
 import ImportComponent from './ImportComponent.vue'
 import * as ExcelJS from 'exceljs'
 
@@ -23,7 +23,7 @@ onMounted(() => {
 
 const fetchFactories = async () => {
   try {
-    const response = await axios.get('http://127.0.0.1:9876/api/factories/')
+    const response = await api.get('/factories/')
     factories.value = response.data
   } catch (error) {
     console.error('Error fetching factories:', error)
@@ -45,7 +45,7 @@ const saveFactory = async () => {
     
     // 为每个车间创建一个工厂记录
     for (const workshop of workshops) {
-      await axios.post('http://127.0.0.1:9876/api/factories/', {
+      await api.post('/factories/', {
         name: `${form.value.location} ${workshop}车间`,
         location: form.value.location,
         workshop: workshop
@@ -61,7 +61,7 @@ const saveFactory = async () => {
 
 const deleteFactory = async (id) => {
   try {
-    await axios.delete(`http://127.0.0.1:9876/api/factories/${id}/`)
+    await api.delete(`/factories/${id}/`)
     fetchFactories()
   } catch (error) {
     console.error('Error deleting factory:', error)
@@ -129,7 +129,7 @@ const handleImportSuccess = async (data) => {
     const row = data[i]
     try {
       // 保存数据
-      await axios.post('http://127.0.0.1:9876/api/factories/', {
+      await api.post('/factories/', {
         name: `${row.location} ${row.workshop}车间`,
         location: row.location,
         workshop: row.workshop
