@@ -51,6 +51,26 @@
               :value="factory.id"
             />
           </el-select>
+          <h4 style="margin-top: 10px;">客户</h4>
+          <div class="customer-line">
+            <el-select
+              v-model="selectedCustomer"
+              filterable
+              allow-create
+              default-first-option
+              clearable
+              placeholder="选择或输入客户"
+              style="width: 180px;"
+            >
+              <el-option
+                v-for="customer in customerOptions"
+                :key="customer"
+                :label="customer"
+                :value="customer"
+              />
+            </el-select>
+            <el-button size="small" @click="openCustomerManager">客户管理</el-button>
+          </div>
         </div>
         <div class="template-right">
           <h4>计划日期</h4>
@@ -177,6 +197,23 @@
     <div class="production-plans-section">
       <div class="section-header">
         <h3>生产计划列表</h3>
+        <div class="plan-filter-bar">
+          <el-select v-model="filterCustomer" clearable placeholder="筛选客户" style="width: 140px">
+            <el-option v-for="customer in customerOptions" :key="customer" :label="customer" :value="customer" />
+          </el-select>
+          <el-select v-model="groupMode" style="width: 140px">
+            <el-option label="按日期+类型" value="date_type" />
+            <el-option label="按日期" value="date" />
+            <el-option label="按客户" value="customer" />
+          </el-select>
+          <el-select v-model="sortMode" style="width: 140px">
+            <el-option label="时间倒序" value="date_desc" />
+            <el-option label="时间正序" value="date_asc" />
+            <el-option label="客户 A-Z" value="customer_asc" />
+            <el-option label="客户 Z-A" value="customer_desc" />
+          </el-select>
+          <el-button type="success" @click="exportFilteredPlans">导出筛选计划</el-button>
+        </div>
       </div>
       
       <!-- 按日期分组显示 -->
@@ -189,7 +226,7 @@
           
           <!-- 计划卡片列表 -->
           <div class="plans-container">
-            <div v-for="plan in typeGroup" :key="plan.id" class="plan-card" @click="loadPlan(plan)">
+            <div v-for="plan in typeGroup" :key="plan.id" class="plan-card">
               <el-tooltip placement="top" effect="dark">
                 <template #content>
                   <div style="white-space: pre-wrap;">{{ getPlanSizeDetails(plan) }}</div>
@@ -205,6 +242,7 @@
                   <div class="plan-summary">
                     <span class="plan-models">型号: {{ (plan.models_data || plan.models || []).length }} 个</span>
                     <span class="plan-total">总计: {{ calculatePlanTotalQuantity(plan) }} 套</span>
+                    <span class="plan-customer">客户: {{ plan.customer || '未设置' }}</span>
                   </div>
                 </div>
               </el-tooltip>
@@ -214,7 +252,7 @@
       </div>
       
       <!-- 空状态 -->
-      <el-empty v-if="productionPlans.length === 0" description="暂无生产计划" />
+      <el-empty v-if="displayedPlans.length === 0" description="暂无生产计划" />
     </div>
   </div>
 
@@ -380,6 +418,23 @@
     :validate="validateImportData"
     @success="handleImportSuccess"
   />
+  <el-dialog v-model="customerManagerVisible" title="客户管理" width="520px">
+    <div class="customer-manager">
+      <div class="customer-add">
+        <el-input v-model="newCustomerName" placeholder="输入客户名称" @keyup.enter="addCustomer" />
+        <el-button type="primary" @click="addCustomer">添加</el-button>
+      </div>
+      <el-empty v-if="customerOptions.length === 0" description="暂无客户" />
+      <el-table v-else :data="customerOptions.map((name) => ({ name }))" size="small" style="margin-top: 10px;">
+        <el-table-column prop="name" label="客户名称" />
+        <el-table-column label="操作" width="120" align="center">
+          <template #default="{ row }">
+            <el-button type="danger" size="small" @click="removeCustomer(row.name)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -388,10 +443,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Download, Plus, Delete, Edit, Setting, Upload } from '@element-plus/icons-vue'
 import * as ExcelJS from 'exceljs'
 import axios from 'axios'
+import { useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
 import ImportComponent from './ImportComponent.vue'
 
 const authStore = useAuthStore()
+const route = useRoute()
 
 // 模板数据 - 严格按照用户提供的数据
 const templatesData = {
@@ -474,7 +531,7 @@ const sizes = ref([])
 const zoomLevel = ref(100)
 const factories = ref([])
 const selectedFactory = ref(null)
-const availableColors = ref(['黑色', '卡其', '军绿', '丛林', '三沙', '藏蓝', '数码丛林', '数码海洋', '数码沙漠', '黑蟒纹', '绿蟒纹', '绿废墟', '灰废墟', '小绿人', '黑cp', 'cp', '绿cp'])
+const availableColors = ref([])
 const selectedMaterialTemplate = ref('')
 
 // 模板管理相关状态
@@ -685,21 +742,16 @@ const updateIncomingMaterials = () => {
 // 更新布料库存
 const updateClothInventory = async (clothName, quantity) => {
   try {
-    // 查找对应的染色布材料
+    // 查找对应的染色布材料（materials 接口可能分页）
     const response = await axios.get('http://127.0.0.1:9876/api/materials/')
-    const materials = response.data
+    const materials = extractMaterials(response.data)
     const clothMaterial = materials.find(m => m.type === 'dyed_fabric' && m.color === clothName)
     
     if (clothMaterial) {
-      // 更新库存，确保quantity是数字类型
-      // 确保supplier和factory字段是正确的格式
-      const updatedMaterial = {
-        ...clothMaterial,
-        quantity: Number(quantity) || 0,
-        supplier: clothMaterial.supplier?.id || clothMaterial.supplier || null,
-        factory: clothMaterial.factory?.id || clothMaterial.factory || null
-      }
-      await axios.put(`http://127.0.0.1:9876/api/materials/${clothMaterial.id}/`, updatedMaterial)
+      // 用 PATCH 只更新数量，避免传入无关字段导致后端校验失败
+      await axios.patch(`http://127.0.0.1:9876/api/materials/${clothMaterial.id}/`, {
+        quantity: Number(quantity) || 0
+      })
       // 重新加载库存
       loadClothInventory()
       ElMessage.success('染色布库存已更新')
@@ -714,19 +766,13 @@ const updateClothInventory = async (clothName, quantity) => {
         // 刷新令牌成功后重试
         try {
           const response = await axios.get('http://127.0.0.1:9876/api/materials/')
-          const materials = response.data
+          const materials = extractMaterials(response.data)
           const clothMaterial = materials.find(m => m.type === 'dyed_fabric' && m.color === clothName)
           
           if (clothMaterial) {
-            // 更新库存，确保quantity是数字类型
-            // 确保supplier和factory字段是正确的格式
-            const updatedMaterial = {
-              ...clothMaterial,
-              quantity: Number(quantity) || 0,
-              supplier: clothMaterial.supplier?.id || clothMaterial.supplier || null,
-              factory: clothMaterial.factory?.id || clothMaterial.factory || null
-            }
-            await axios.put(`http://127.0.0.1:9876/api/materials/${clothMaterial.id}/`, updatedMaterial)
+            await axios.patch(`http://127.0.0.1:9876/api/materials/${clothMaterial.id}/`, {
+              quantity: Number(quantity) || 0
+            })
             // 重新加载库存
             loadClothInventory()
             ElMessage.success('染色布库存已更新')
@@ -819,6 +865,22 @@ const changeTemplate = () => {
   }
 }
 
+const syncModelColorsWithInventory = () => {
+  const valid = new Set(availableColors.value)
+  if (!valid.size) return
+  let adjusted = false
+  models.value.forEach((m) => {
+    const color = (m.color || '').trim()
+    if (color && !valid.has(color)) {
+      m.color = availableColors.value[0]
+      adjusted = true
+    }
+  })
+  if (adjusted) {
+    ElMessage.warning('已按当前染色布库存校正计划颜色')
+  }
+}
+
 // 从材料溯源获取可用染色布
 const fetchAvailableColors = async () => {
   try {
@@ -833,6 +895,7 @@ const fetchAvailableColors = async () => {
       }
     })
     availableColors.value = Array.from(cloths)
+    syncModelColorsWithInventory()
   } catch (error) {
     console.error('获取染色布选项失败:', error)
     // 处理认证错误
@@ -852,6 +915,7 @@ const fetchAvailableColors = async () => {
             }
           })
           availableColors.value = Array.from(cloths)
+          syncModelColorsWithInventory()
           return
         } catch (retryError) {
           console.error('重试获取染色布选项失败:', retryError)
@@ -972,6 +1036,74 @@ const exportTable = async () => {
   }
 }
 
+const buildPlanWorksheet = (workbook, plan) => {
+  const safeSheetName = `${plan.date || '无日期'}-${plan.name || '计划'}`.slice(0, 31)
+  const worksheet = workbook.addWorksheet(safeSheetName)
+  const modelsData = plan.models_data || plan.models || []
+  const sizesData = plan.sizes_data || plan.sizes || []
+  const columns = [
+    { header: '尺码', key: 'size', width: 10 },
+    { header: '耗料/套', key: 'materialPerSet', width: 12 },
+  ]
+  modelsData.forEach((model) => {
+    columns.push({ header: `${model.name} - 耗料/米`, key: `material_${model.name}`, width: 16 })
+    columns.push({ header: `${model.name} - 数量/套`, key: `quantity_${model.name}`, width: 12 })
+  })
+  worksheet.columns = columns
+  worksheet.getRow(1).font = { bold: true }
+
+  let rowIndex = 2
+  sizesData.forEach((size) => {
+    const row = worksheet.getRow(rowIndex)
+    row.getCell(1).value = size.name || ''
+    row.getCell(2).value = Number(size.materialPerSet) || 0
+    let currentCol = 3
+    modelsData.forEach((_, modelIndex) => {
+      const qty = Number((size.quantities || [])[modelIndex]) || 0
+      const materialPerSet = Number(size.materialPerSet) || 0
+      row.getCell(currentCol).value = Number((materialPerSet * qty).toFixed(2))
+      row.getCell(currentCol + 1).value = qty
+      currentCol += 2
+    })
+    rowIndex++
+  })
+
+  const total = calculatePlanTotalQuantity(plan)
+  worksheet.getRow(rowIndex).getCell(1).value = '总计'
+  worksheet.getRow(rowIndex).getCell(2).value = `${total} 套`
+  worksheet.getRow(rowIndex).font = { bold: true }
+  worksheet.getCell('A1').note = `客户: ${plan.customer || '未设置'}`
+}
+
+const exportFilteredPlans = async () => {
+  if (displayedPlans.value.length === 0) {
+    ElMessage.warning('当前筛选条件下没有可导出的计划')
+    return
+  }
+  try {
+    const workbook = new ExcelJS.Workbook()
+    displayedPlans.value.forEach((plan) => buildPlanWorksheet(workbook, plan))
+    const summary = workbook.addWorksheet('导出说明')
+    summary.columns = [{ header: '字段', key: 'k', width: 20 }, { header: '值', key: 'v', width: 60 }]
+    summary.addRow({ k: '筛选客户', v: filterCustomer.value || '全部' })
+    summary.addRow({ k: '分组方式', v: groupMode.value })
+    summary.addRow({ k: '排序方式', v: sortMode.value })
+    summary.addRow({ k: '导出计划数', v: displayedPlans.value.length })
+    const buffer = await workbook.xlsx.writeBuffer()
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `生产计划_筛选导出_${new Date().toISOString().split('T')[0]}.xlsx`
+    link.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('筛选计划导出成功')
+  } catch (e) {
+    console.error('筛选计划导出失败', e)
+    ElMessage.error('筛选计划导出失败')
+  }
+}
+
 const adjustTableZoom = (delta) => {
   zoomLevel.value = Math.max(50, Math.min(200, zoomLevel.value + delta * 100))
   const table = document.querySelector('.production-table')
@@ -1034,6 +1166,14 @@ const handleQuantityCellClick = (size, modelIndex) => {
 const productionPlans = ref([])
 const planDate = ref(new Date().toISOString().split('T')[0])
 const planName = ref('')
+const selectedCustomer = ref('')
+const customerOptions = ref([])
+const customerManagerVisible = ref(false)
+const newCustomerName = ref('')
+const filterCustomer = ref('')
+const groupMode = ref('date_type')
+const sortMode = ref('date_desc')
+const CUSTOMER_STORAGE_KEY = 'production_customers_v1'
 
 // 模板类型名称映射
 const templateTypeNames = {
@@ -1073,19 +1213,111 @@ const getFactoryName = (factoryId) => {
   return factory ? factory.name : '未知工厂'
 }
 
+const persistCustomers = () => {
+  try {
+    localStorage.setItem(CUSTOMER_STORAGE_KEY, JSON.stringify(customerOptions.value))
+  } catch (e) {
+    console.warn('保存客户列表失败', e)
+  }
+}
+
+const loadCustomers = () => {
+  try {
+    const raw = localStorage.getItem(CUSTOMER_STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      customerOptions.value = parsed.filter(Boolean)
+    }
+  } catch (e) {
+    console.warn('读取客户列表失败', e)
+  }
+}
+
+const addCustomerToOptions = (name) => {
+  const normalized = (name || '').trim()
+  if (!normalized) return
+  if (!customerOptions.value.includes(normalized)) {
+    customerOptions.value.push(normalized)
+    persistCustomers()
+  }
+}
+
+const openCustomerManager = () => {
+  customerManagerVisible.value = true
+}
+
+const addCustomer = () => {
+  const name = (newCustomerName.value || '').trim()
+  if (!name) return
+  addCustomerToOptions(name)
+  selectedCustomer.value = name
+  newCustomerName.value = ''
+  ElMessage.success('客户已添加')
+}
+
+const removeCustomer = (name) => {
+  ElMessageBox.confirm(`确定删除客户「${name}」？`, '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(() => {
+    customerOptions.value = customerOptions.value.filter(c => c !== name)
+    if (selectedCustomer.value === name) selectedCustomer.value = ''
+    if (filterCustomer.value === name) filterCustomer.value = ''
+    persistCustomers()
+    ElMessage.success('客户已删除')
+  }).catch(() => {})
+}
+
 // 按日期和类型分组计算属性
+const displayedPlans = computed(() => {
+  let rows = [...productionPlans.value]
+  if (filterCustomer.value) {
+    rows = rows.filter((p) => (p.customer || '') === filterCustomer.value)
+  }
+  rows.sort((a, b) => {
+    const ad = a.date || ''
+    const bd = b.date || ''
+    const ac = (a.customer || '').toLowerCase()
+    const bc = (b.customer || '').toLowerCase()
+    switch (sortMode.value) {
+      case 'date_asc':
+        return ad.localeCompare(bd)
+      case 'customer_asc':
+        return ac.localeCompare(bc) || ad.localeCompare(bd)
+      case 'customer_desc':
+        return bc.localeCompare(ac) || bd.localeCompare(ad)
+      case 'date_desc':
+      default:
+        return bd.localeCompare(ad)
+    }
+  })
+  return rows
+})
+
 const groupedPlans = computed(() => {
   const grouped = {}
-  productionPlans.value.forEach(plan => {
-    const date = plan.date
-    const type = plan.plan_type || plan.type
-    if (!grouped[date]) {
-      grouped[date] = {}
+  displayedPlans.value.forEach(plan => {
+    const date = plan.date || '未设置日期'
+    const type = plan.plan_type || plan.type || '未分类'
+    const customer = plan.customer || '未设置客户'
+    let level1 = date
+    let level2 = type
+    if (groupMode.value === 'date') {
+      level1 = date
+      level2 = customer
+    } else if (groupMode.value === 'customer') {
+      level1 = customer
+      level2 = type
     }
-    if (!grouped[date][type]) {
-      grouped[date][type] = []
+    if (!grouped[level1]) {
+      grouped[level1] = {}
     }
-    grouped[date][type].push(plan)
+    if (!grouped[level1][level2]) {
+      grouped[level1][level2] = []
+    }
+    grouped[level1][level2].push(plan)
   })
   return grouped
 })
@@ -1145,6 +1377,10 @@ const saveCurrentPlan = async () => {
     date: planDate.value,
     plan_type: typeName,
     name: planName,
+    customer: (selectedCustomer.value || '').trim(),
+    cloth_color: model.color || '',
+    cloth_used: Number(totalMaterials.value) || 0,
+    cloth_remaining: Number(remainingMaterials.value) || 0,
     factory_id: selectedFactory.value,
     template: currentTemplate.value,
     models_data: JSON.parse(JSON.stringify(models.value)),
@@ -1154,6 +1390,7 @@ const saveCurrentPlan = async () => {
   try {
     const response = await axios.post('http://127.0.0.1:9876/api/production-plan-details/', planData)
     productionPlans.value.push(response.data)
+    addCustomerToOptions(planData.customer)
     
     // 更新布料库存，将余料返回库存
     const clothName = models.value[0].color
@@ -1172,6 +1409,7 @@ const saveCurrentPlan = async () => {
         // 刷新令牌成功后重试
         const response = await axios.post('http://127.0.0.1:9876/api/production-plan-details/', planData)
         productionPlans.value.push(response.data)
+        addCustomerToOptions(planData.customer)
         
         // 更新布料库存，将余料返回库存
         const clothName = models.value[0].color
@@ -1194,7 +1432,9 @@ const loadPlan = (plan) => {
   sizes.value = JSON.parse(JSON.stringify(plan.sizes_data || plan.sizes || []))
   currentTemplate.value = plan.template
   planDate.value = plan.date
+  selectedCustomer.value = plan.customer || ''
   selectedFactory.value = plan.factory?.id || plan.factory_id || null
+  syncModelColorsWithInventory()
   ElMessage.success('计划已加载')
 }
 
@@ -1238,6 +1478,12 @@ const fetchProductionPlans = async () => {
   try {
     const response = await axios.get('http://127.0.0.1:9876/api/production-plan-details/')
     productionPlans.value = response.data
+    productionPlans.value.forEach((p) => addCustomerToOptions(p.customer))
+    const queryPlanId = Number(route.query.planId)
+    if (queryPlanId) {
+      const target = productionPlans.value.find((p) => p.id === queryPlanId)
+      if (target) loadPlan(target)
+    }
   } catch (error) {
     console.error('获取生产计划列表失败:', error)
     // 处理认证错误
@@ -1247,6 +1493,12 @@ const fetchProductionPlans = async () => {
         // 刷新令牌成功后重试
         const response = await axios.get('http://127.0.0.1:9876/api/production-plan-details/')
         productionPlans.value = response.data
+        productionPlans.value.forEach((p) => addCustomerToOptions(p.customer))
+        const queryPlanId = Number(route.query.planId)
+        if (queryPlanId) {
+          const target = productionPlans.value.find((p) => p.id === queryPlanId)
+          if (target) loadPlan(target)
+        }
         return
       }
     }
@@ -1436,16 +1688,12 @@ const exportMaterials = () => {
 }
 
 // 生命周期
-onMounted(() => {
-  // 初始化数据
+onMounted(async () => {
+  loadCustomers()
+  await fetchAvailableColors()
   changeTemplate()
-  // 获取工厂列表
   fetchFactories()
-  // 获取生产计划列表
   fetchProductionPlans()
-  // 获取可用布料
-  fetchAvailableColors()
-  // 加载布料库存
   loadClothInventory()
 })
 </script>
@@ -1464,6 +1712,30 @@ onMounted(() => {
   margin-bottom: 20px;
   padding-bottom: 10px;
   border-bottom: 1px solid #eaeaea;
+}
+
+.customer-line {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-filter-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.plan-customer {
+  color: #606266;
+}
+
+.customer-manager .customer-add {
+  display: flex;
+  gap: 10px;
+  align-items: center;
 }
 
 .production-header h2 {

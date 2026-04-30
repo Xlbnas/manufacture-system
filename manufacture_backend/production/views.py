@@ -9,8 +9,10 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import transaction
 from django.db.models import F
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import serializers, status, viewsets
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -43,6 +45,14 @@ from .serializers import (
     WarehouseNodeSerializer,
     WarehouseSerializer,
 )
+from .backup_utils import (
+    BackupError,
+    CONFIRM_RESTORE_TEXT,
+    cleanup_temp_backup,
+    create_temp_backup_archive,
+    inspect_backup_archive,
+    restore_backup_archive,
+)
 
 
 def _get_stock(warehouse, product, color, size):
@@ -74,7 +84,8 @@ class WarehouseNodeViewSet(viewsets.ModelViewSet):
 class MaterialViewSet(viewsets.ModelViewSet):
     queryset = Material.objects.all().order_by('-id')
     serializer_class = MaterialSerializer
-    http_method_names = ['get', 'post', 'head', 'options']
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -256,7 +267,7 @@ def _resolve_ai_config():
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser']
 
 
 @api_view(['GET'])
@@ -266,6 +277,75 @@ def me_view(request):
     return Response({
         'user': UserSerializer(request.user).data
     })
+
+
+def _require_superuser(request):
+    if not request.user.is_superuser:
+        return Response({'error': '仅超级管理员可执行系统备份操作'}, status=status.HTTP_403_FORBIDDEN)
+    return None
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def backup_export_view(request):
+    denied = _require_superuser(request)
+    if denied:
+        return denied
+
+    archive_path = create_temp_backup_archive()
+    try:
+        data = archive_path.read_bytes()
+    finally:
+        cleanup_temp_backup(archive_path)
+
+    response = HttpResponse(data, content_type='application/zip')
+    response['Content-Disposition'] = f'attachment; filename="{archive_path.name}"'
+    response['Cache-Control'] = 'no-store'
+    return response
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def backup_inspect_view(request):
+    denied = _require_superuser(request)
+    if denied:
+        return denied
+
+    upload = request.FILES.get('file')
+    if not upload:
+        return Response({'error': '请上传备份文件'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        info = inspect_backup_archive(upload)
+    except BackupError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(info)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def backup_restore_view(request):
+    denied = _require_superuser(request)
+    if denied:
+        return denied
+
+    confirm_text = (request.data.get('confirm_text') or '').strip()
+    if confirm_text != CONFIRM_RESTORE_TEXT:
+        return Response({'error': f'请输入确认文本：{CONFIRM_RESTORE_TEXT}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    upload = request.FILES.get('file')
+    if not upload:
+        return Response({'error': '请上传备份文件'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = restore_backup_archive(upload)
+    except BackupError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:
+        return Response({'error': f'恢复失败，已尝试回滚: {exc}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return Response(result)
 
 
 @api_view(['POST'])

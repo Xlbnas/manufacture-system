@@ -1,0 +1,28 @@
+/* 表格操作列：与深色模式下的可读性 */
+.delete-undo-notification {
+  padding-right: 4px;
+}
+
+html body.dark-mode .el-table .el-button--danger.is-link,
+html body.dark-mode .el-table .el-button--danger {
+  --el-button-text-color: #f89898;
+  --el-button-bg-color: rgba(245, 108, 108, 0.15);
+  --el-button-border-color: rgba(245, 108, 108, 0.45);
+}
+
+html body.dark-mode .el-table .el-button--primary {
+  --el-button-bg-color: rgba(64, 158, 255, 0.25);
+  --el-button-border-color: rgba(64, 158, 255, 0.55);
+  --el-button-text-color: #b3d8ff;
+}
+
+html body.dark-mode .el-table td .el-space {
+  flex-wrap: wrap;
+}
+
+html body.dark-mode .el-notification {
+  --el-notification-bg-color: #1e1e1e;
+  --el-notification-border-color: #333;
+  --el-notification-title-color: #e8e8e8;
+  --el-notification-content-color: #cfcfcf;
+}

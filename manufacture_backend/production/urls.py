@@ -13,7 +13,14 @@ from .views import (
     WarehouseViewSet,
     TransferOrderViewSet,
 )
-from .views import me_view, ai_summarize_view, ai_config_view
+from .views import (
+    ai_config_view,
+    ai_summarize_view,
+    backup_export_view,
+    backup_inspect_view,
+    backup_restore_view,
+    me_view,
+)
 
 router = DefaultRouter()
 router.register(r'factories', FactoryViewSet)
@@ -34,4 +41,7 @@ urlpatterns = [
     path('auth/me/', me_view, name='me'),
     path('ai/summarize/', ai_summarize_view, name='ai_summarize'),
     path('ai/config/', ai_config_view, name='ai_config'),
+    path('system/backup/export/', backup_export_view, name='backup_export'),
+    path('system/backup/inspect/', backup_inspect_view, name='backup_inspect'),
+    path('system/backup/restore/', backup_restore_view, name='backup_restore'),
 ]

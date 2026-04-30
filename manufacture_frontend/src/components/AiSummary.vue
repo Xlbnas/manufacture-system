@@ -66,8 +66,10 @@
               <div class="history-query">{{ item.query }}</div>
               <el-input :model-value="item.summary" type="textarea" :rows="6" readonly />
               <div class="history-actions">
-                <el-button size="small" @click="reuseHistory(item)">复用到分析区</el-button>
-                <el-button size="small" type="danger" @click="removeHistory(item.id)">删除</el-button>
+                <el-space :size="8" wrap>
+                  <el-button size="small" @click="reuseHistory(item)">复用到分析区</el-button>
+                  <el-button size="small" type="danger" @click="removeHistory(item)">删除</el-button>
+                </el-space>
               </div>
             </el-card>
           </div>
@@ -90,7 +92,16 @@
               <el-input v-model="configForm.apiKey" type="password" show-password placeholder="请输入新的 API Key" />
             </el-form-item>
             <el-form-item label="模型">
-              <el-input v-model="configForm.model" />
+              <el-select
+                v-model="configForm.model"
+                filterable
+                allow-create
+                default-first-option
+                placeholder="选择常用模型或直接输入模型 id"
+                style="width: 100%"
+              >
+                <el-option v-for="m in modelPresets" :key="m" :label="m" :value="m" />
+              </el-select>
             </el-form-item>
             <el-form-item label="API URL">
               <el-input v-model="configForm.apiUrl" />
@@ -137,8 +148,19 @@
 import { computed, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../utils/axios.js'
+import { deleteWithUndo } from '../composables/deleteWithUndo.js'
 
 const STORAGE_KEY = 'ai_summary_history'
+
+/** SiliconFlow 等常用模型 id（可下拉选择或直接输入） */
+const modelPresets = [
+  'deepseek-ai/DeepSeek-V4-Flash',
+  'deepseek-ai/DeepSeek-V3.2',
+  'Qwen/Qwen2.5-72B-Instruct',
+  'Qwen/Qwen2.5-32B-Instruct',
+  'THUDM/glm-4-9b-chat',
+  'meta-llama/Llama-3.3-70B-Instruct',
+]
 
 const activeTab = ref('data')
 const templateKey = ref('general')
@@ -242,14 +264,50 @@ const appendHistory = (item) => {
   persistHistory()
 }
 
-const removeHistory = (id) => {
-  history.value = history.value.filter(item => item.id !== id)
-  persistHistory()
+const removeHistory = async (item) => {
+  const snapshot = JSON.parse(JSON.stringify(item))
+  try {
+    await deleteWithUndo({
+      confirmMessage: '确定删除这条历史记录？',
+      deleteFn: async () => {
+        history.value = history.value.filter((x) => x.id !== item.id)
+        persistHistory()
+      },
+      undo: {
+        handler: async () => {
+          if (!history.value.some((x) => x.id === snapshot.id)) {
+            history.value.unshift(snapshot)
+            persistHistory()
+          }
+        },
+      },
+      successMessage: '历史记录已删除',
+    })
+  } catch (e) {
+    console.error(e)
+  }
 }
 
-const clearHistory = () => {
-  history.value = []
-  persistHistory()
+const clearHistory = async () => {
+  const backup = JSON.parse(JSON.stringify(history.value))
+  try {
+    await deleteWithUndo({
+      confirmMessage: '确定清空全部 AI 历史记录？',
+      deleteFn: async () => {
+        history.value = []
+        persistHistory()
+      },
+      undo: {
+        handler: async () => {
+          history.value = backup
+          persistHistory()
+        },
+      },
+      successMessage: '历史已清空',
+    })
+  } catch (e) {
+    console.error(e)
+  }
 }
 
 const reuseHistory = (item) => {

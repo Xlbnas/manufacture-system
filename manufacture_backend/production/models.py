@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
+from django.core.validators import FileExtensionValidator
 from django.db import models
 
 
@@ -67,7 +68,17 @@ class Material(models.Model):
     stock_date = models.DateField(verbose_name='入库日期')
     supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, verbose_name='供应商', blank=True, null=True)
     warehouse = models.ForeignKey(WarehouseNode, on_delete=models.SET_NULL, verbose_name='所属仓库', blank=True, null=True)
-    attachment = models.ImageField(upload_to='material_attachments/', blank=True, null=True, verbose_name='附件')
+    attachment = models.FileField(
+        upload_to='material_attachments/',
+        blank=True,
+        null=True,
+        verbose_name='附件',
+        validators=[
+            FileExtensionValidator(
+                allowed_extensions=['pdf', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'doc', 'docx', 'xlsx', 'xls']
+            )
+        ],
+    )
     source_material = models.ForeignKey('self', on_delete=models.SET_NULL, blank=True, null=True, verbose_name='来源坯布')
     remark = models.TextField(blank=True, default='', verbose_name='备注')
 
@@ -134,6 +145,10 @@ class ProductionPlanDetail(models.Model):
     date = models.DateField(verbose_name='计划日期')
     plan_type = models.CharField(max_length=50, verbose_name='计划类型')
     name = models.CharField(max_length=200, verbose_name='计划名称')
+    customer = models.CharField(max_length=100, verbose_name='客户', blank=True, default='')
+    cloth_color = models.CharField(max_length=50, verbose_name='用布颜色', blank=True, default='')
+    cloth_used = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='用布数量', default=Decimal('0.00'))
+    cloth_remaining = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='余料数量', default=Decimal('0.00'))
     factory = models.ForeignKey(Factory, on_delete=models.SET_NULL, verbose_name='目标工厂', blank=True, null=True)
     template = models.CharField(max_length=50, verbose_name='模板类型')
     models_data = models.JSONField(verbose_name='型号数据', default=list)

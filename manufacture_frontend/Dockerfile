@@ -1,26 +1,20 @@
-# 使用Node.js 18作为基础镜像
-FROM node:18-alpine
+# 构建前端静态资源
+FROM node:22-alpine AS build
 
-# 设置工作目录
 WORKDIR /app
 
-# 复制依赖文件
 COPY package*.json ./
+RUN npm ci
 
-# 安装依赖
-RUN npm install
-
-# 复制项目代码
 COPY . .
-
-# 构建生产版本
 RUN npm run build
 
-# 安装serve包用于提供静态文件
-RUN npm install -g serve
+# 用 Nginx 提供静态资源，并在容器网络内反代 API
+FROM nginx:1.27-alpine
 
-# 暴露5173端口
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+
 EXPOSE 5173
 
-# 启动服务
-CMD ["serve", "-s", "dist", "-l", "5173"]
+CMD ["nginx", "-g", "daemon off;"]

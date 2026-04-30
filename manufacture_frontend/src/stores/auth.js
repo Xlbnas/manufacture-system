@@ -6,6 +6,7 @@ import axios from 'axios'
 axios.defaults.withCredentials = true
 
 const REFRESH_TOKEN_KEY = 'refresh_token'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 const saveRefreshToken = (token, rememberMe) => {
   if (rememberMe) {
@@ -37,7 +38,7 @@ export const useAuthStore = defineStore('auth', () => {
   // Actions
   const login = async (username, password, rememberMe = false) => {
     try {
-      const response = await axios.post('http://127.0.0.1:9876/api/token/', {
+      const response = await axios.post(`${API_BASE_URL}/token/`, {
         username,
         password
       })
@@ -86,7 +87,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     isRefreshing.value = true
-    refreshPromise = axios.post('http://127.0.0.1:9876/api/token/refresh/', {
+    refreshPromise = axios.post(`${API_BASE_URL}/token/refresh/`, {
       refresh: refreshToken
     })
       .then(response => {
@@ -113,7 +114,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   const fetchUserInfo = async () => {
     try {
-      const response = await axios.get('http://127.0.0.1:9876/api/auth/me/', {
+      const response = await axios.get(`${API_BASE_URL}/auth/me/`, {
         headers: {
           'Authorization': `Bearer ${accessToken.value}`
         }

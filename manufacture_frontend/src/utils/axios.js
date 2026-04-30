@@ -4,11 +4,9 @@ import router from '../router'
 
 // 创建 axios 实例
 const api = axios.create({
-  baseURL: 'http://127.0.0.1:9876/api',
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json'
-  },
+  headers: {},
   withCredentials: true // 允许携带凭证（cookie）
 })
 
@@ -16,6 +14,12 @@ const api = axios.create({
 api.interceptors.request.use(
   (config) => {
     const authStore = useAuthStore()
+    // FormData 上传必须让浏览器自动设置 multipart 边界
+    if (config.data instanceof FormData) {
+      delete config.headers['Content-Type']
+    } else if (!config.headers['Content-Type']) {
+      config.headers['Content-Type'] = 'application/json'
+    }
     // 添加访问令牌到请求头
     if (authStore.accessToken) {
       config.headers.Authorization = `Bearer ${authStore.accessToken}`

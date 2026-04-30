@@ -117,6 +117,16 @@ Manufacture/
 2. 开发环境下使用的是Django和Vite的开发服务器，生产环境需要使用专业的Web服务器。
 3. 系统目前没有实现用户认证和权限控制，生产环境需要添加相关功能。
 
+## 生产数据备份与恢复
+
+系统提供“系统备份”页面，仅超级管理员可使用。
+
+- 备份包格式为 `.zip`，包含 `db.sqlite3`、`media/` 附件目录和 `manifest.json` 校验文件。
+- 建议每天结束工作后导出一次完整备份，并保存到 VPS 以外的位置。
+- 恢复备份前，系统会自动将当前状态保存到 `manufacture_backend/backups/pre-restore-*.zip`。
+- 恢复会覆盖当前数据库和附件，恢复完成后需要重新登录。
+- VPS 正式使用时，仍建议额外定期备份 `manufacture_backend/db.sqlite3` 和 `manufacture_backend/media/`。
+
 ## 联系方式
 
 如有问题，请联系系统管理员。

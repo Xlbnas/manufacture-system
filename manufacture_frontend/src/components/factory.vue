@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import api from '../utils/axios'
 import ImportComponent from './ImportComponent.vue'
 import * as ExcelJS from 'exceljs'
+import { deleteWithUndo } from '../composables/deleteWithUndo.js'
 
 const factories = ref([])
 const dialogVisible = ref(false)
@@ -59,10 +60,22 @@ const saveFactory = async () => {
   }
 }
 
-const deleteFactory = async (id) => {
+const deleteFactory = async (row) => {
   try {
-    await api.delete(`/factories/${id}/`)
-    fetchFactories()
+    await deleteWithUndo({
+      confirmMessage: `确定删除工厂「${row.location} ${row.workshop}车间」？`,
+      deleteFn: () => api.delete(`/factories/${row.id}/`),
+      undo: {
+        post: '/factories/',
+        payload: {
+          name: row.name,
+          location: row.location,
+          workshop: row.workshop,
+        },
+      },
+      onSuccess: fetchFactories,
+      successMessage: '工厂已删除',
+    })
   } catch (error) {
     console.error('Error deleting factory:', error)
   }
@@ -162,15 +175,17 @@ const handleImportSuccess = async (data) => {
       </template>
       <el-table :data="factories" style="width: 100%">
         <el-table-column label="工厂" width="250">
-          <template #default="scope">
-            {{ scope.row.location }} {{ scope.row.workshop }}车间
+          <template #default="{ row }">
+            {{ row.location }} {{ row.workshop }}车间
           </template>
         </el-table-column>
         <el-table-column prop="location" label="地区" width="180" />
         <el-table-column prop="workshop" label="车间" width="180" />
-        <el-table-column label="操作">
-          <template #default="scope">
-            <el-button type="danger" @click="deleteFactory(scope.row.id)">删除</el-button>
+        <el-table-column label="操作" width="120" align="center">
+          <template #default="{ row }">
+            <el-space :size="8" wrap>
+              <el-button type="danger" size="small" @click="deleteFactory(row)">删除</el-button>
+            </el-space>
           </template>
         </el-table-column>
       </el-table>

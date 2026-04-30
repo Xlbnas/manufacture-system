@@ -353,22 +353,11 @@ export default {
         // 如果读取失败，使用默认数据
       }
       
-      // 确保outboundData格式正确，避免NaN显示
-      if (!this.outboundData || !Array.isArray(this.outboundData)) {
-        this.outboundData = [
-          { month: '1月', value: 120 },
-          { month: '2月', value: 190 },
-          { month: '3月', value: 300 },
-          { month: '4月', value: 500 },
-          { month: '5月', value: 200 },
-          { month: '6月', value: 300 }
-        ]
-      } else {
-        // 确保每个数据项都有有效的month和value字段
-        this.outboundData = this.outboundData.map(item => ({
-          month: item.month || '',
-          value: Number(item.value) || 0
-        })).filter(item => item.month)
+      this.outboundData = this.sanitizeOutboundChartData(this.outboundData)
+      try {
+        localStorage.setItem('outboundData', JSON.stringify(this.outboundData))
+      } catch (e) {
+        /* ignore quota / private mode */
       }
       
       // 确保容器尺寸正确
@@ -400,6 +389,42 @@ export default {
     // 检查是否为深色模式
     isDarkMode() {
       return document.documentElement.classList.contains('dark-mode')
+    },
+    /** 调拨趋势：localStorage/手工数据可能把 month 写成 "NaN" 或非字符串，类目轴会原样显示 */
+    sanitizeOutboundChartData(source) {
+      const fallback = [
+        { month: '1月', value: 120 },
+        { month: '2月', value: 190 },
+        { month: '3月', value: 300 },
+        { month: '4月', value: 500 },
+        { month: '5月', value: 200 },
+        { month: '6月', value: 300 }
+      ]
+      if (!source || !Array.isArray(source) || source.length === 0) {
+        return fallback.slice()
+      }
+      const out = []
+      for (let i = 0; i < source.length; i++) {
+        const item = source[i]
+        if (!item || typeof item !== 'object') continue
+        const rawMonth = item.month
+        const rawVal = item.value
+        let monthStr = ''
+        if (rawMonth != null && !(typeof rawMonth === 'number' && !Number.isFinite(rawMonth))) {
+          monthStr = typeof rawMonth === 'string' ? rawMonth.trim() : String(rawMonth).trim()
+        }
+        if (
+          !monthStr ||
+          monthStr === 'NaN' ||
+          monthStr === 'undefined' ||
+          monthStr === 'null'
+        ) {
+          monthStr = `${out.length + 1}月`
+        }
+        const v = Number(rawVal)
+        out.push({ month: monthStr, value: Number.isFinite(v) ? v : 0 })
+      }
+      return out.length ? out : fallback.slice()
     },
     initChart1() {
       const chartContainer1 = this.$refs.chartContainer1
@@ -898,41 +923,48 @@ export default {
           this.chart3.dispose()
         }
         
-        // 确保outboundData格式正确，避免NaN显示
-        if (!this.outboundData || !Array.isArray(this.outboundData)) {
-          this.outboundData = [
-            { month: '1月', value: 120 },
-            { month: '2月', value: 190 },
-            { month: '3月', value: 300 },
-            { month: '4月', value: 500 },
-            { month: '5月', value: 200 },
-            { month: '6月', value: 300 }
-          ]
-        } else {
-          // 确保每个数据项都有有效的month和value字段
-          this.outboundData = this.outboundData.map(item => ({
-            month: item.month || '',
-            value: Number(item.value) || 0
-          })).filter(item => item.month)
-        }
+        this.outboundData = this.sanitizeOutboundChartData(this.outboundData)
         
         this.chart3 = echarts.init(chartContainer3)
         const isDark = this.isDarkMode()
         
-        // 确保outboundData格式正确，提取有效的月份和数值
-        if (!this.outboundData || !Array.isArray(this.outboundData)) {
-          this.outboundData = [
-            { month: '1月', value: 120 },
-            { month: '2月', value: 190 },
-            { month: '3月', value: 300 },
-            { month: '4月', value: 500 },
-            { month: '5月', value: 200 },
-            { month: '6月', value: 300 }
-          ]
-        }
-        const validOutboundData = this.outboundData.filter(item => item && item.month && item.month.trim())
+        const validOutboundData = this.outboundData.filter((item) => {
+          if (!item || item.month == null) return false
+          const m = typeof item.month === 'string' ? item.month.trim() : String(item.month).trim()
+          return m.length > 0
+        })
         const months = validOutboundData.map(item => item.month || '')
         const values = validOutboundData.map(item => Number(item.value) || 0)
+
+        // cross + smooth 时，类目轴上的指示值可能是 NaN（内部插值坐标），不能 String(NaN)；
+        // 应用 seriesData[0].name 或按索引取 months。
+        const formatCrossAxisPointerLabel = (p) => {
+          const dim = p.axisDimension || p.axisDim
+          const v = p.value
+          const fromSeries = () => {
+            const sd = p.seriesData && p.seriesData[0]
+            if (!sd) return ''
+            if (sd.name != null && String(sd.name).trim() !== '') return String(sd.name)
+            const di = sd.dataIndex
+            if (typeof di === 'number' && months[di] != null) return months[di]
+            return ''
+          }
+          if (dim === 'x') {
+            if (typeof v === 'string' && v.trim() !== '') return v
+            if (typeof v === 'number' && Number.isFinite(v)) {
+              const idx = Math.round(v)
+              if (months[idx] !== undefined) return months[idx]
+              return String(Math.round(v))
+            }
+            const fb = fromSeries()
+            return fb || ''
+          }
+          if (v === undefined || v === null) return ''
+          if (typeof v === 'number' && !Number.isFinite(v)) return fromSeries() || ''
+          if (typeof v === 'string') return v
+          const n = Number(v)
+          return Number.isFinite(n) ? Math.round(n) : fromSeries() || ''
+        }
         
         // 存储当前选中的数据点索引
         let selectedPointIndex = -1
@@ -949,17 +981,14 @@ export default {
               label: {
                 show: true,
                 position: 'left',
-                formatter: function(params) {
-                  // 确保数值为整数格式
-                  return Math.round(params.value);
-                },
+                formatter: formatCrossAxisPointerLabel,
                 backgroundColor: 'rgba(0, 0, 0, 0.8)',
                 borderColor: '#409EFF',
                 borderWidth: 1,
                 color: '#fff',
                 fontSize: 12
               },
-              axis: 'y' // 只在y轴显示标签
+              axis: 'y' // 指示线仍以 y 为主；标签 formatter 需兼容类目轴上的字符串
             },
             backgroundColor: 'rgba(0, 0, 0, 0.8)',
             borderColor: '#409EFF',
@@ -1060,7 +1089,6 @@ export default {
               smooth: true,
               symbol: 'circle',
               symbolSize: 8,
-              sampling: 'lttb',
               lineStyle: {
                 width: 3
               },
@@ -1126,9 +1154,7 @@ export default {
               this.setOption({
                 axisPointer: {
                   label: {
-                    formatter: function(params) {
-                      return Math.round(params.value);
-                    }
+                    formatter: formatCrossAxisPointerLabel
                   }
                 }
               })
@@ -1163,9 +1189,7 @@ export default {
           this.setOption({
             axisPointer: {
               label: {
-                formatter: function(params) {
-                  return Math.round(params.value);
-                }
+                formatter: formatCrossAxisPointerLabel
               }
             }
           })

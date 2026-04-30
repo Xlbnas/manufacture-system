@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import api from '../utils/axios'
 import { ElMessage } from 'element-plus'
+import { deleteWithUndo } from '../composables/deleteWithUndo.js'
 import * as ExcelJS from 'exceljs'
 import ImportComponent from './ImportComponent.vue'
 
@@ -176,14 +177,24 @@ const updateProduct = async () => {
   }
 }
 
-const deleteProduct = async (id) => {
-  if (confirm('确定要删除这个产品吗？')) {
-    try {
-      await api.delete(`/products/${id}/`)
-      fetchProducts()
-    } catch (error) {
-      console.error('Error deleting product:', error)
-    }
+const deleteProduct = async (row) => {
+  try {
+    await deleteWithUndo({
+      confirmMessage: `确定删除产品「${row.name}」？`,
+      deleteFn: () => api.delete(`/products/${row.id}/`),
+      undo: {
+        post: '/products/',
+        payload: {
+          name: row.name,
+          colors: row.colors || '',
+          specifications: row.specifications || '',
+        },
+      },
+      onSuccess: fetchProducts,
+      successMessage: '产品已删除',
+    })
+  } catch (e) {
+    console.error('Error deleting product:', e)
   }
 }
 
@@ -363,10 +374,12 @@ const handleImportSuccess = async (data) => {
         <el-table-column prop="name" label="产品名称" width="180" />
         <el-table-column prop="colors" label="颜色选项" width="200" />
         <el-table-column prop="specifications" label="规格参数" />
-        <el-table-column label="操作" width="150">
-          <template #default="scope">
-            <el-button type="primary" size="small" @click="openEditDialog(scope.row)">编辑</el-button>
-            <el-button type="danger" size="small" @click="deleteProduct(scope.row.id)">删除</el-button>
+        <el-table-column label="操作" width="180" align="center">
+          <template #default="{ row }">
+            <el-space :size="8" wrap>
+              <el-button type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
+              <el-button type="danger" size="small" @click="deleteProduct(row)">删除</el-button>
+            </el-space>
           </template>
         </el-table-column>
       </el-table>

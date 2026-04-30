@@ -66,6 +66,12 @@ const routes = [
     name: 'AiSummary',
     component: () => import('../components/AiSummary.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/system-backup',
+    name: 'SystemBackup',
+    component: () => import('../components/SystemBackup.vue'),
+    meta: { requiresAuth: true }
   }
 ]
 

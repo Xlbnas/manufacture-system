@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../utils/axios'
+import { deleteWithUndo } from '../composables/deleteWithUndo.js'
 
 const suppliers = ref([])
 const warehouses = ref([])
@@ -38,9 +39,42 @@ const saveWarehouse = async () => {
   ElMessage.success('仓库已保存')
 }
 
-const removeSupplier = async (id) => {
-  await api.delete(`/suppliers/${id}/`)
-  await loadData()
+const removeSupplier = async (row) => {
+  try {
+    await deleteWithUndo({
+      confirmMessage: `确定删除供应商「${row.name}」？`,
+      deleteFn: () => api.delete(`/suppliers/${row.id}/`),
+      undo: {
+        post: '/suppliers/',
+        payload: { name: row.name, type: row.type },
+      },
+      onSuccess: loadData,
+      successMessage: '供应商已删除',
+    })
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+const removeWarehouse = async (row) => {
+  try {
+    await deleteWithUndo({
+      confirmMessage: `确定删除仓库「${row.name}」？若有调拨单引用可能失败。`,
+      deleteFn: () => api.delete(`/warehouse-nodes/${row.id}/`),
+      undo: {
+        post: '/warehouse-nodes/',
+        payload: {
+          name: row.name,
+          warehouse_type: row.warehouse_type,
+          factory: row.factory ?? null,
+        },
+      },
+      onSuccess: loadData,
+      successMessage: '仓库已删除',
+    })
+  } catch (e) {
+    console.error(e)
+  }
 }
 
 onMounted(loadData)
@@ -60,9 +94,11 @@ onMounted(loadData)
           <el-table :data="suppliers" size="small">
             <el-table-column prop="name" label="名称" />
             <el-table-column prop="type" label="类型" width="120" />
-            <el-table-column label="操作" width="90">
+            <el-table-column label="操作" width="100" align="center">
               <template #default="{ row }">
-                <el-button type="danger" link @click="removeSupplier(row.id)">删除</el-button>
+                <el-space :size="8" wrap>
+                  <el-button type="danger" size="small" @click="removeSupplier(row)">删除</el-button>
+                </el-space>
               </template>
             </el-table-column>
           </el-table>
@@ -82,6 +118,13 @@ onMounted(loadData)
               <template #default="{ row }">{{ row.warehouse_type === 'factory' ? '工厂仓' : '本地仓' }}</template>
             </el-table-column>
             <el-table-column prop="factory_name" label="所属工厂" />
+            <el-table-column label="操作" width="100" align="center">
+              <template #default="{ row }">
+                <el-space :size="8" wrap>
+                  <el-button type="danger" size="small" @click="removeWarehouse(row)">删除</el-button>
+                </el-space>
+              </template>
+            </el-table-column>
           </el-table>
         </el-card>
       </el-col>

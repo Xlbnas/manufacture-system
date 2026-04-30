@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { PieChart, OfficeBuilding, Box, Refresh, Goods, Moon, Sunny, HomeFilled, User, SwitchButton, Wallet, ChatDotRound } from '@element-plus/icons-vue'
+import { PieChart, OfficeBuilding, Box, Refresh, Goods, Moon, Sunny, HomeFilled, User, SwitchButton, Wallet, ChatDotRound, FolderChecked } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -118,6 +118,10 @@ onMounted(() => {
           <el-menu-item index="ai-summary">
             <el-icon><ChatDotRound /></el-icon>
             <span>AI总结</span>
+          </el-menu-item>
+          <el-menu-item index="system-backup">
+            <el-icon><FolderChecked /></el-icon>
+            <span>系统备份</span>
           </el-menu-item>
         </el-menu>
       </el-aside>

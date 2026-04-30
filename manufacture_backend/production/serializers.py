@@ -45,6 +45,16 @@ class MaterialSerializer(serializers.ModelSerializer):
         model = Material
         fields = '__all__'
 
+    def validate(self, attrs):
+        typ = attrs.get('type') or (self.instance and self.instance.type)
+        attachment = attrs.get('attachment', serializers.empty)
+        has_new_file = attachment not in (None, serializers.empty)
+        existing_file = bool(self.instance and self.instance.attachment)
+        # 新建辅料必须有附件；已存在记录允许补传或仅改其它字段
+        if typ == 'accessory' and self.instance is None and not has_new_file:
+            raise serializers.ValidationError({'attachment': '辅料入库需上传附件（PDF/Office/图片）'})
+        return attrs
+
 
 class MaterialDetailSerializer(serializers.ModelSerializer):
     supplier = SupplierSerializer(read_only=True)
@@ -104,7 +114,12 @@ class ProductionPlanDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProductionPlanDetail
-        fields = ['id', 'date', 'plan_type', 'name', 'factory', 'factory_id', 'template', 'models_data', 'sizes_data', 'created_at', 'updated_at']
+        fields = [
+            'id', 'date', 'plan_type', 'name', 'customer',
+            'cloth_color', 'cloth_used', 'cloth_remaining',
+            'factory', 'factory_id', 'template', 'models_data', 'sizes_data',
+            'created_at', 'updated_at'
+        ]
 
 
 class DyeingOrderSerializer(serializers.ModelSerializer):

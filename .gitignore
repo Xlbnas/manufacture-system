@@ -1,5 +1,7 @@
 # Python 依赖
 venv/
+.venv/
+**/.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -27,6 +29,8 @@ build/
 # 数据库文件
 *.sqlite3
 *.db
+backups/
+**/backups/
 
 # 编辑器文件
 .vscode/
