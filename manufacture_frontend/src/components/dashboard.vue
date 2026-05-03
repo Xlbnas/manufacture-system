@@ -4,7 +4,6 @@
       <h2>生产数据看板</h2>
       <div class="header-actions">
         <el-button v-if="showBackButton" type="info" @click="goBack">返回上一级</el-button>
-        <el-button type="primary" @click="openDataModal">管理示例数据</el-button>
         <el-button type="success" @click="openDataManagement">数据管理</el-button>
       </div>
     </div>
@@ -23,57 +22,6 @@
       </div>
     </div>
 
-    <!-- 数据管理弹窗 -->
-    <el-dialog
-      v-model="dataModalVisible"
-      title="管理示例数据"
-      width="800px"
-    >
-      <el-tabs v-model="activeTab">
-        <el-tab-pane label="生产进度" name="production">
-          <el-table :data="productionData" style="width: 100%">
-            <el-table-column prop="name" label="车间" width="180" />
-            <el-table-column prop="plan" label="计划数量">
-              <template #default="scope">
-                <el-input v-model.number="scope.row.plan" type="number" />
-              </template>
-            </el-table-column>
-            <el-table-column prop="actual" label="已完成数量">
-              <template #default="scope">
-                <el-input v-model.number="scope.row.actual" type="number" />
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
-        <el-tab-pane label="库存分布" name="inventory">
-          <el-table :data="inventoryData" style="width: 100%">
-            <el-table-column prop="name" label="车间" width="180" />
-            <el-table-column prop="value" label="库存数量">
-              <template #default="scope">
-                <el-input v-model.number="scope.row.value" type="number" />
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
-        <el-tab-pane label="调拨趋势" name="transfer">
-          <el-table :data="outboundData" style="width: 100%">
-            <el-table-column prop="month" label="月份" width="100" />
-            <el-table-column prop="value" label="调拨数量">
-              <template #default="scope">
-                <el-input v-model.number="scope.row.value" type="number" />
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
-      </el-tabs>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="dataModalVisible = false">取消</el-button>
-          <el-button type="primary" @click="saveData">保存数据</el-button>
-        </span>
-      </template>
-    </el-dialog>
-    
     <!-- 数据管理弹窗 -->
     <el-dialog
       v-model="dataManagementVisible"
@@ -145,6 +93,7 @@
 import * as echarts from 'echarts'
 import api from '../utils/axios'
 import * as ExcelJS from 'exceljs'
+import { ElMessage } from 'element-plus'
 import { Check, Close } from '@element-plus/icons-vue'
 
 export default {
@@ -153,9 +102,6 @@ export default {
       chart1: null,
       chart2: null,
       chart3: null,
-      // 数据管理相关
-      dataModalVisible: false,
-      activeTab: 'production',
       // 图表交互相关
       showBackButton: false,
       inventoryChartTitle: '库存分布',
@@ -171,155 +117,137 @@ export default {
       importSuccess: false,
       backupError: '',
       importError: '',
-      // 示例数据
-      productionData: [
-        { name: '武昌八车间', plan: 1000, actual: 800 },
-        { name: '蔡甸十一车间', plan: 1500, actual: 1200 },
-        { name: '汉口三车间', plan: 800, actual: 600 },
-        { name: '汉阳五车间', plan: 1200, actual: 900 }
-      ],
-      inventoryData: [
-        { name: '武昌八车间', value: 300 },
-        { name: '蔡甸十一车间', value: 450 },
-        { name: '汉口三车间', value: 200 },
-        { name: '汉阳五车间', value: 350 }
-      ],
-      // 模拟车间产品库存数据
-      factoryProductData: {
-        '武昌八车间': [
-          { name: '产品A', value: 150 },
-          { name: '产品B', value: 100 },
-          { name: '产品C', value: 50 }
-        ],
-        '蔡甸十一车间': [
-          { name: '产品A', value: 200 },
-          { name: '产品B', value: 150 },
-          { name: '产品C', value: 100 }
-        ],
-        '汉口三车间': [
-          { name: '产品A', value: 100 },
-          { name: '产品B', value: 60 },
-          { name: '产品C', value: 40 }
-        ],
-        '汉阳五车间': [
-          { name: '产品A', value: 180 },
-          { name: '产品B', value: 120 },
-          { name: '产品C', value: 50 }
-        ]
-      },
-      // 模拟产品颜色库存数据
-      productColorData: {
-        '产品A': [
-          { name: '红色', value: 200 },
-          { name: '蓝色', value: 150 },
-          { name: '绿色', value: 100 }
-        ],
-        '产品B': [
-          { name: '红色', value: 180 },
-          { name: '蓝色', value: 120 },
-          { name: '黑色', value: 80 }
-        ],
-        '产品C': [
-          { name: '白色', value: 120 },
-          { name: '黑色', value: 80 }
-        ]
-      },
-      // 模拟颜色尺码库存数据
-      colorSizeData: {
-        '红色': [
-          { name: 'S', value: 50 },
-          { name: 'M', value: 80 },
-          { name: 'L', value: 100 },
-          { name: 'XL', value: 70 }
-        ],
-        '蓝色': [
-          { name: 'S', value: 40 },
-          { name: 'M', value: 60 },
-          { name: 'L', value: 80 },
-          { name: 'XL', value: 50 }
-        ],
-        '绿色': [
-          { name: 'S', value: 30 },
-          { name: 'M', value: 40 },
-          { name: 'L', value: 20 },
-          { name: 'XL', value: 10 }
-        ],
-        '黑色': [
-          { name: 'S', value: 25 },
-          { name: 'M', value: 35 },
-          { name: 'L', value: 40 },
-          { name: 'XL', value: 20 }
-        ],
-        '白色': [
-          { name: 'S', value: 30 },
-          { name: 'M', value: 45 },
-          { name: 'L', value: 35 },
-          { name: 'XL', value: 10 }
-        ]
-      },
-      outboundData: [
-        { month: '1月', value: 120 },
-        { month: '2月', value: 190 },
-        { month: '3月', value: 300 },
-        { month: '4月', value: 500 },
-        { month: '5月', value: 200 },
-        { month: '6月', value: 300 }
-      ]
+      /** 成品库存原始行（双仓），用于饼图下钻与汇总 */
+      warehouseStocksRaw: [],
+      /** 生产进度柱状图：name / plan / actual，来自 API */
+      productionData: [],
+      /** 库存饼图顶层：按仓库汇总 */
+      inventoryData: [],
+      /** 调拨趋势折线：按月汇总已完成调拨件数 */
+      outboundData: []
     }
   },
   methods: {
-    // 数据管理方法
-    openDataModal() {
-      this.dataModalVisible = true
+    extractList(res) {
+      const d = res?.data
+      if (Array.isArray(d)) return d
+      if (d && Array.isArray(d.results)) return d.results
+      return []
     },
-    saveData() {
-      // 验证数据格式
-      const isValid = this.validateData()
-      if (!isValid) {
-        return
+    /** 从后端拉取看板三张图所需数据 */
+    async loadDashboardFromApi() {
+      try {
+        const [plansRes, progressRes, productsRes, warehouseRes] = await Promise.all([
+          api.get('/production-plans/'),
+          api.get('/production-progress/'),
+          api.get('/products/'),
+          api.get('/warehouse/')
+        ])
+        const plans = this.extractList(plansRes)
+        const progresses = this.extractList(progressRes)
+        const products = this.extractList(productsRes)
+        const stocks = this.extractList(warehouseRes)
+
+        const productNameById = {}
+        for (const p of products) {
+          productNameById[p.id] = p.name || `产品#${p.id}`
+        }
+
+        const actualByPlanId = {}
+        for (const pr of progresses) {
+          const pid = pr.plan
+          if (pid == null) continue
+          const q = Number(pr.current_quantity) || 0
+          actualByPlanId[pid] = Math.max(actualByPlanId[pid] || 0, q)
+        }
+
+        this.productionData = plans.map((plan) => ({
+          name: `${productNameById[plan.product] || '产品'} #${plan.id}`,
+          plan: Number(plan.quantity) || 0,
+          actual: actualByPlanId[plan.id] != null ? actualByPlanId[plan.id] : 0
+        }))
+
+        this.warehouseStocksRaw = stocks
+        this.inventoryData = this.aggregateStocksByWarehouseName(stocks)
+
+        const ordersRes = await api.get('/transfer-orders/')
+        const orders = this.extractList(ordersRes)
+        this.outboundData = this.buildTransferMonthlySeries(orders)
+      } catch (e) {
+        console.error('loadDashboardFromApi', e)
+        ElMessage.error('看板数据加载失败，请检查网络或重新登录')
+        this.productionData = []
+        this.warehouseStocksRaw = []
+        this.inventoryData = []
+        this.outboundData = []
       }
-      
-      // 保存数据到本地存储（模拟数据录入数据库）
-      localStorage.setItem('productionData', JSON.stringify(this.productionData))
-      localStorage.setItem('inventoryData', JSON.stringify(this.inventoryData))
-      localStorage.setItem('outboundData', JSON.stringify(this.outboundData))
-      
-      // 更新图表
-      this.updateCharts()
-      
-      // 关闭弹窗
-      this.dataModalVisible = false
     },
-    validateData() {
-      // 验证生产进度数据
-      for (const item of this.productionData) {
-        if (isNaN(item.plan) || item.plan < 0) {
-          alert('生产进度数据格式错误，请检查计划数量');
-          return false
-        }
-        if (isNaN(item.actual) || item.actual < 0) {
-          alert('生产进度数据格式错误，请检查已完成数量');
-          return false
-        }
+    aggregateStocksByWarehouseName(stocks) {
+      const map = {}
+      for (const row of stocks || []) {
+        const wname = row.warehouse?.name || '未分配仓库'
+        const q = Number(row.quantity) || 0
+        map[wname] = (map[wname] || 0) + q
       }
-      
-      // 验证库存分布数据
-      for (const item of this.inventoryData) {
-        if (isNaN(item.value) || item.value < 0) {
-          alert('库存分布数据格式错误，请检查库存数量');
-          return false
-        }
+      return Object.entries(map).map(([name, value]) => ({ name, value }))
+    },
+    stocksFilteredByWarehouse(warehouseName) {
+      return (this.warehouseStocksRaw || []).filter(
+        (r) => (r.warehouse?.name || '未分配仓库') === warehouseName
+      )
+    },
+    aggregateByProductName(stocks) {
+      const map = {}
+      for (const row of stocks || []) {
+        const pname = row.product?.name || `产品#${row.product}`
+        const q = Number(row.quantity) || 0
+        map[pname] = (map[pname] || 0) + q
       }
-      
-      // 验证调拨趋势数据
-      for (const item of this.outboundData) {
-        if (isNaN(item.value) || item.value < 0) {
-          alert('调拨趋势数据格式错误，请检查调拨数量');
-          return false
-        }
+      return Object.entries(map).map(([name, value]) => ({ name, value }))
+    },
+    aggregateByColor(stocks) {
+      const map = {}
+      for (const row of stocks || []) {
+        const c = row.color || '—'
+        const q = Number(row.quantity) || 0
+        map[c] = (map[c] || 0) + q
       }
-      
-      return true
+      return Object.entries(map).map(([name, value]) => ({ name, value }))
+    },
+    aggregateBySize(stocks) {
+      const map = {}
+      for (const row of stocks || []) {
+        const s = row.size || '—'
+        const q = Number(row.quantity) || 0
+        map[s] = (map[s] || 0) + q
+      }
+      return Object.entries(map).map(([name, value]) => ({ name, value }))
+    },
+    buildTransferMonthlySeries(orders) {
+      const completed = (orders || []).filter((o) => o.status === 'completed')
+      const bucket = {}
+      for (const o of completed) {
+        const raw = o.completed_at || o.created_at
+        if (!raw) continue
+        const d = new Date(raw)
+        if (Number.isNaN(d.getTime())) continue
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        const items = o.items || []
+        let qty = 0
+        for (const it of items) {
+          qty += Number(it.quantity) || 0
+        }
+        bucket[key] = (bucket[key] || 0) + qty
+      }
+      const keys = Object.keys(bucket).sort()
+      if (!keys.length) {
+        return []
+      }
+      return keys.map((k) => {
+        const [y, m] = k.split('-').map(Number)
+        const label = `${y}年${m}月`
+        return { month: label, value: bucket[k] }
+      })
     },
     updateCharts() {
       // 更新所有图表
@@ -333,32 +261,7 @@ export default {
       if (this.chart3) this.chart3.resize()
     },
     initCharts() {
-      // 从本地存储读取数据（如果存在）
-      try {
-        const savedProductionData = localStorage.getItem('productionData')
-        const savedInventoryData = localStorage.getItem('inventoryData')
-        const savedOutboundData = localStorage.getItem('outboundData')
-        
-        if (savedProductionData) {
-          this.productionData = JSON.parse(savedProductionData)
-        }
-        if (savedInventoryData) {
-          this.inventoryData = JSON.parse(savedInventoryData)
-        }
-        if (savedOutboundData) {
-          this.outboundData = JSON.parse(savedOutboundData)
-        }
-      } catch (error) {
-        console.error('Error reading data from localStorage:', error)
-        // 如果读取失败，使用默认数据
-      }
-      
       this.outboundData = this.sanitizeOutboundChartData(this.outboundData)
-      try {
-        localStorage.setItem('outboundData', JSON.stringify(this.outboundData))
-      } catch (e) {
-        /* ignore quota / private mode */
-      }
       
       // 确保容器尺寸正确
       const containers = [
@@ -392,16 +295,8 @@ export default {
     },
     /** 调拨趋势：localStorage/手工数据可能把 month 写成 "NaN" 或非字符串，类目轴会原样显示 */
     sanitizeOutboundChartData(source) {
-      const fallback = [
-        { month: '1月', value: 120 },
-        { month: '2月', value: 190 },
-        { month: '3月', value: 300 },
-        { month: '4月', value: 500 },
-        { month: '5月', value: 200 },
-        { month: '6月', value: 300 }
-      ]
       if (!source || !Array.isArray(source) || source.length === 0) {
-        return fallback.slice()
+        return []
       }
       const out = []
       for (let i = 0; i < source.length; i++) {
@@ -424,7 +319,7 @@ export default {
         const v = Number(rawVal)
         out.push({ month: monthStr, value: Number.isFinite(v) ? v : 0 })
       }
-      return out.length ? out : fallback.slice()
+      return out
     },
     initChart1() {
       const chartContainer1 = this.$refs.chartContainer1
@@ -436,30 +331,24 @@ export default {
           this.chart1.dispose()
         }
         
-        // 确保productionData格式正确
-        if (!this.productionData || !Array.isArray(this.productionData)) {
-          this.productionData = [
-            { name: '武昌八车间', plan: 1000, actual: 800 },
-            { name: '蔡甸十一车间', plan: 1500, actual: 1200 },
-            { name: '汉口三车间', plan: 800, actual: 600 },
-            { name: '汉阳五车间', plan: 1200, actual: 900 }
-          ]
-        } else {
-          // 确保每个数据项都有有效的数值
-          this.productionData = this.productionData.map(item => ({
+        let rows = Array.isArray(this.productionData) ? this.productionData : []
+        rows = rows
+          .map((item) => ({
             name: item.name || '',
             plan: Number(item.plan) || 0,
             actual: Number(item.actual) || 0
-          })).filter(item => item.name)
+          }))
+          .filter((item) => item.name)
+        if (!rows.length) {
+          rows = [{ name: '暂无生产计划', plan: 0, actual: 0 }]
         }
-        
+
         this.chart1 = echarts.init(chartContainer1)
         const isDark = this.isDarkMode()
-        
-        // 确保数据格式正确，提取数值
-        const planData = this.productionData.map(item => Number(item.plan) || 0)
-        const actualData = this.productionData.map(item => Number(item.actual) || 0)
-        const names = this.productionData.map(item => item.name || '')
+
+        const planData = rows.map((item) => Number(item.plan) || 0)
+        const actualData = rows.map((item) => Number(item.actual) || 0)
+        const names = rows.map((item) => item.name || '')
         
         const option = {
           tooltip: {
@@ -683,23 +572,37 @@ export default {
             chartData = this.inventoryData
             seriesName = '库存数量'
             break
-          case 'product':
-            chartData = this.factoryProductData[this.currentFactory] || []
+          case 'product': {
+            const st = this.stocksFilteredByWarehouse(this.currentFactory)
+            chartData = this.aggregateByProductName(st)
             seriesName = '产品库存'
             break
-          case 'color':
-            chartData = this.productColorData[this.currentProduct] || []
+          }
+          case 'color': {
+            const st = this.stocksFilteredByWarehouse(this.currentFactory).filter(
+              (r) => (r.product?.name || `产品#${r.product}`) === this.currentProduct
+            )
+            chartData = this.aggregateByColor(st)
             seriesName = '颜色库存'
             break
-          case 'size':
-            chartData = this.colorSizeData[this.currentColor] || []
+          }
+          case 'size': {
+            const st = this.stocksFilteredByWarehouse(this.currentFactory)
+              .filter((r) => (r.product?.name || `产品#${r.product}`) === this.currentProduct)
+              .filter((r) => (r.color || '—') === this.currentColor)
+            chartData = this.aggregateBySize(st)
             seriesName = '尺码库存'
             break
+          }
           default:
             chartData = this.inventoryData
             seriesName = '库存数量'
         }
-        
+
+        if (!chartData || chartData.length === 0) {
+          chartData = [{ name: '暂无', value: 0 }]
+        }
+
         const option = {
           tooltip: {
             trigger: 'item',
@@ -785,14 +688,16 @@ export default {
 
       try {
         // 获取所有数据
-        const [factories, products, warehouse, transferOrders, productionPlans, materials] = await Promise.all([
+        const [fRes, pRes, wRes, tRes] = await Promise.all([
           api.get('/factories/'),
           api.get('/products/'),
           api.get('/warehouse/'),
-          api.get('/transfer-orders/'),
-          api.get('/production-plan-details/'),
-          api.get('/materials/')
+          api.get('/transfer-orders/')
         ])
+        const factories = this.extractList(fRes)
+        const products = this.extractList(pRes)
+        const warehouse = this.extractList(wRes)
+        const transferOrders = this.extractList(tRes)
 
         this.backupProgress = 30
 
@@ -805,7 +710,7 @@ export default {
           { header: '地区', key: 'location', width: 20 },
           { header: '车间', key: 'workshop', width: 20 }
         ]
-        factories.data.forEach(item => {
+        factories.forEach(item => {
           factoryWorksheet.addRow({
             location: item.location,
             workshop: item.workshop
@@ -821,7 +726,7 @@ export default {
           { header: '颜色选项', key: 'colors', width: 30 },
           { header: '规格参数', key: 'specifications', width: 30 }
         ]
-        products.data.forEach(item => {
+        products.forEach(item => {
           productWorksheet.addRow({
             name: item.name,
             colors: item.colors || '',
@@ -840,7 +745,7 @@ export default {
           { header: '数量', key: 'quantity', width: 10 },
           { header: '工厂', key: 'factory', width: 20 }
         ]
-        warehouse.data.forEach(item => {
+        warehouse.forEach(item => {
           warehouseWorksheet.addRow({
             product: item.product?.name || item.product,
             color: item.color,
@@ -861,7 +766,7 @@ export default {
           { header: '状态', key: 'status', width: 12 },
           { header: '创建时间', key: 'created_at', width: 22 }
         ]
-        transferOrders.data.forEach(item => {
+        transferOrders.forEach(item => {
           outboundWorksheet.addRow({
             id: item.id,
             from_warehouse: item.from_warehouse?.name || '',
@@ -933,8 +838,12 @@ export default {
           const m = typeof item.month === 'string' ? item.month.trim() : String(item.month).trim()
           return m.length > 0
         })
-        const months = validOutboundData.map(item => item.month || '')
-        const values = validOutboundData.map(item => Number(item.value) || 0)
+        let months = validOutboundData.map((item) => item.month || '')
+        let values = validOutboundData.map((item) => Number(item.value) || 0)
+        if (!months.length) {
+          months = ['暂无已完成调拨']
+          values = [0]
+        }
 
         // cross + smooth 时，类目轴上的指示值可能是 NaN（内部插值坐标），不能 String(NaN)；
         // 应用 seriesData[0].name 或按索引取 months。
@@ -1042,7 +951,7 @@ export default {
           xAxis: [
             {
               type: 'category',
-              data: months.length > 0 ? months : ['1月', '2月', '3月', '4月', '5月', '6月'],
+              data: months,
               axisLabel: {
                 color: isDark ? '#e0e0e0' : '#333'
               },
@@ -1200,12 +1109,12 @@ export default {
     }
   },
   mounted() {
-    // 确保DOM完全渲染后再初始化图表
-    setTimeout(() => {
-      this.initCharts()
-    }, 1000)
-    
     window.addEventListener('resize', this.handleResize)
+    this.loadDashboardFromApi().then(() => {
+      setTimeout(() => {
+        this.initCharts()
+      }, 300)
+    })
   },
   beforeUnmount() {
     window.removeEventListener('resize', this.handleResize)

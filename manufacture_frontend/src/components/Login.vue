@@ -183,3 +183,27 @@ const handleLogin = async () => {
   margin-top: 20px;
 }
 </style>
+
+<style>
+/* 登录页在 html.dark-mode 下：标题与卡片对比度（与 App 全局暗色一致） */
+html.dark-mode .login-page .login-title {
+  color: #e8eaed;
+}
+
+html.dark-mode .login-page .login-card {
+  background: rgba(34, 37, 42, 0.94);
+  border-color: #4a4f58;
+}
+
+html.dark-mode .login-page .login-card .el-card__header {
+  border-bottom-color: #4a4f58;
+}
+
+html.dark-mode .login-page .login-card .el-form-item__label {
+  color: #cfd3dc;
+}
+
+html.dark-mode .login-page .login-card .el-checkbox__label {
+  color: #cfd3dc;
+}
+</style>

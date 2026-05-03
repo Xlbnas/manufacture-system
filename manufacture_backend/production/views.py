@@ -1,7 +1,6 @@
 import json
 import os
 import socket
-from decimal import Decimal
 from pathlib import Path
 from urllib import error, request as urlrequest
 
@@ -378,6 +377,7 @@ def ai_summarize_view(request):
         product_limit = 80 if compact else 200
         plan_limit = 120 if compact else 200
         warehouse_limit = 120 if compact else 300
+        transfer_limit = 80 if compact else 200
         context = {}
         if scope in ('all', 'factory'):
             context['factories'] = list(Factory.objects.values('id', 'name', 'location', 'workshop')[:factory_limit])
@@ -395,12 +395,25 @@ def ai_summarize_view(request):
             context['warehouse'] = list(
                 Warehouse.objects.values('id', 'product_id', 'color', 'size', 'quantity', 'warehouse_id').order_by('-id')[:warehouse_limit]
             )
+        if scope in ('all', 'outbound'):
+            context['transfer_orders'] = list(
+                TransferOrder.objects.values(
+                    'id',
+                    'from_warehouse__name',
+                    'to_warehouse__name',
+                    'status',
+                    'note',
+                    'created_at',
+                    'completed_at',
+                ).order_by('-id')[:transfer_limit]
+            )
         summary = {
             'factory_count': Factory.objects.count(),
             'material_count': Material.objects.count(),
             'product_count': Product.objects.count(),
             'plan_detail_count': ProductionPlanDetail.objects.count(),
             'warehouse_record_count': Warehouse.objects.count(),
+            'transfer_order_count': TransferOrder.objects.count(),
         }
         return {'summary': summary, 'scope': scope, 'compact': compact, 'data': context}
 
@@ -418,7 +431,7 @@ def ai_summarize_view(request):
         'model': model,
         'messages': [
             {'role': 'system', 'content': f"你是工厂管理系统的数据分析助手。{prompt}"},
-            {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False)},
+            {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False, default=str)},
         ],
         'temperature': 0.3,
         'max_tokens': 1200,
@@ -427,7 +440,7 @@ def ai_summarize_view(request):
     def call_ai(api_payload):
         req = urlrequest.Request(
             api_url,
-            data=json.dumps(api_payload).encode('utf-8'),
+            data=json.dumps(api_payload, default=str).encode('utf-8'),
             headers={
                 'Authorization': f'Bearer {api_key}',
                 'Content-Type': 'application/json',
@@ -448,7 +461,7 @@ def ai_summarize_view(request):
             'model': model,
             'messages': [
                 {'role': 'system', 'content': f"你是工厂管理系统的数据分析助手。{prompt}"},
-                {'role': 'user', 'content': json.dumps(build_user_payload(compact=True), ensure_ascii=False)},
+                {'role': 'user', 'content': json.dumps(build_user_payload(compact=True), ensure_ascii=False, default=str)},
             ],
             'temperature': 0.2,
             'max_tokens': 900,

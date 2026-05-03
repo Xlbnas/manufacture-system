@@ -22,9 +22,9 @@
         description="恢复备份会覆盖当前数据库和附件。系统会在恢复前自动保存一份当前备份，但仍建议先手动导出一份并妥善保存。"
       />
 
-      <div class="section">
+      <div class="section section-backup-info">
         <h3>备份包内容</h3>
-        <el-descriptions :column="1" border>
+        <el-descriptions :column="1" border class="backup-descriptions">
           <el-descriptions-item label="格式">ZIP 压缩包</el-descriptions-item>
           <el-descriptions-item label="包含">db.sqlite3 数据库、media 附件、manifest 校验文件</el-descriptions-item>
           <el-descriptions-item label="权限">仅超级管理员可导出和恢复</el-descriptions-item>
@@ -34,7 +34,7 @@
       <div class="section">
         <h3>恢复备份</h3>
         <el-upload
-          class="backup-upload"
+          class="backup-upload backup-upload-drag"
           action="#"
           accept=".zip"
           :auto-upload="false"
@@ -89,20 +89,23 @@
           :closable="false"
           description="恢复会覆盖当前生产数据。请输入确认文本后才能执行。"
         />
-        <el-input
-          v-model="confirmText"
-          class="confirm-input"
-          :placeholder="`请输入：${requiredConfirmText}`"
-          clearable
-        />
-        <el-button
-          type="danger"
-          :loading="restoring"
-          :disabled="!canRestore"
-          @click="restoreBackup"
-        >
-          恢复此备份
-        </el-button>
+        <div class="restore-actions">
+          <el-input
+            v-model="confirmText"
+            class="confirm-input"
+            :placeholder="`请输入：${requiredConfirmText}`"
+            clearable
+          />
+          <el-button
+            type="danger"
+            class="restore-submit-btn"
+            :loading="restoring"
+            :disabled="!canRestore"
+            @click="restoreBackup"
+          >
+            恢复此备份
+          </el-button>
+        </div>
       </div>
     </el-card>
   </div>
@@ -309,9 +312,23 @@ const restoreBackup = async () => {
   padding-top: 24px;
 }
 
+.restore-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
 .confirm-input {
+  flex: 1 1 auto;
+  min-width: 0;
   max-width: 420px;
-  margin: 0 12px 12px 0;
+}
+
+.restore-submit-btn {
+  flex: 0 0 auto;
+  align-self: center;
 }
 
 .dark-mode .card-header p {
@@ -320,5 +337,115 @@ const restoreBackup = async () => {
 
 .dark-mode .restore-section {
   border-top-color: var(--border-color);
+}
+
+@media (max-width: 640px) {
+  .restore-actions {
+    flex-wrap: wrap;
+  }
+
+  .confirm-input {
+    max-width: none;
+    width: 100%;
+  }
+
+  .restore-submit-btn {
+    width: 100%;
+  }
+}
+</style>
+
+<!-- 暗色模式：无 scoped，确保覆盖 Element Plus 内部节点（fill-color-blank 等） -->
+<style>
+html.dark-mode .system-backup .backup-descriptions.el-descriptions {
+  --el-fill-color-blank: #30343d;
+  --el-descriptions-item-bordered-label-background: #2b3038;
+  --el-text-color-primary: #e8eaed;
+  --el-text-color-regular: #cfd3dc;
+  --el-border-color-lighter: #4a4f58;
+}
+
+html.dark-mode .system-backup .backup-descriptions .el-descriptions__body {
+  background-color: #2b3038 !important;
+}
+
+html.dark-mode .system-backup .backup-descriptions .el-descriptions__table td.el-descriptions__cell {
+  background-color: #30343d !important;
+  color: #e8eaed !important;
+  border-color: #4a4f58 !important;
+}
+
+html.dark-mode .system-backup .backup-descriptions .el-descriptions__label.is-bordered-label {
+  background-color: #2b3038 !important;
+  color: #cfd3dc !important;
+}
+
+html.dark-mode .system-backup .backup-upload-drag.el-upload {
+  background-color: transparent !important;
+}
+
+html.dark-mode .system-backup .backup-upload-drag .el-upload-dragger {
+  --el-fill-color-blank: #2b3038;
+  background-color: #2b3038 !important;
+  border-color: #4a4f58 !important;
+}
+
+html.dark-mode .system-backup .backup-upload-drag .el-upload-dragger:hover {
+  border-color: #66b1ff !important;
+}
+
+html.dark-mode .system-backup .backup-upload-drag .el-upload-dragger.is-dragover {
+  background-color: rgba(102, 177, 255, 0.12) !important;
+  border-color: #66b1ff !important;
+}
+
+html.dark-mode .system-backup .backup-upload-drag .el-upload__text {
+  color: #e8eaed !important;
+}
+
+html.dark-mode .system-backup .backup-upload-drag .el-upload__text em {
+  color: #8cc5ff !important;
+}
+
+html.dark-mode .system-backup .backup-upload-drag .el-icon--upload {
+  color: #8cc5ff !important;
+}
+
+html.dark-mode .system-backup .backup-upload-drag .el-upload__tip {
+  color: #b5bcc8 !important;
+}
+
+html.dark-mode .system-backup .inspect-card.el-card {
+  background-color: var(--card-bg, #2c2c2c) !important;
+  border-color: var(--border-color, #444) !important;
+}
+
+html.dark-mode .system-backup .inspect-card .el-card__header {
+  background-color: var(--card-bg, #2c2c2c) !important;
+  border-bottom-color: var(--border-color, #444) !important;
+  color: #e8eaed !important;
+}
+
+html.dark-mode .system-backup .inspect-card .el-descriptions {
+  --el-fill-color-blank: #30343d;
+  --el-descriptions-item-bordered-label-background: #2b3038;
+  --el-text-color-primary: #e8eaed;
+  --el-text-color-regular: #cfd3dc;
+  --el-border-color-lighter: #4a4f58;
+}
+
+html.dark-mode .system-backup .inspect-card .el-descriptions__body {
+  background-color: #2b3038 !important;
+}
+
+html.dark-mode .system-backup .inspect-card .el-descriptions__table td.el-descriptions__cell {
+  background-color: #30343d !important;
+  color: #e8eaed !important;
+  border-color: #4a4f58 !important;
+}
+
+html.dark-mode .system-backup .inspect-card .el-descriptions__label.is-bordered-label {
+  background-color: #2b3038 !important;
+  color: #cfd3dc !important;
 }
 </style>

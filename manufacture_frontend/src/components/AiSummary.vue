@@ -534,6 +534,13 @@ onMounted(async () => {
   color: #f2f3f5 !important;
 }
 
+/* 暗色下字数统计（el-textarea 的 el-input__count）可读性 */
+:global(.dark-mode) .ai-summary-page .el-textarea .el-input__count,
+:global(.dark-mode) .ai-summary-page .el-input__count {
+  color: #b5bcc8 !important;
+  background: transparent !important;
+}
+
 :global(.dark-mode) .ai-summary-page .loading-line {
   background: linear-gradient(90deg, #3b414c 25%, #4a5160 50%, #3b414c 75%);
   background-size: 200% 100%;
