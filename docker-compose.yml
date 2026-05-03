@@ -12,7 +12,8 @@ services:
       - DATABASE_URL=sqlite:///db.sqlite3
     ports:
       - "9876:9876"
-    command: sh -c "python manage.py migrate --noinput && gunicorn --bind 0.0.0.0:9876 manufacture_project.wsgi:application"
+    # --timeout 须大于 AI 总结内 urlopen(120s) 及压缩重试，默认 30s 会导致 worker 被强杀 → 客户端收到 nginx 500 HTML
+    command: sh -c "python manage.py migrate --noinput && gunicorn --bind 0.0.0.0:9876 --timeout 300 manufacture_project.wsgi:application"
     restart: always
 
   frontend:
