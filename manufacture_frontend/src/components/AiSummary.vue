@@ -372,12 +372,17 @@ const handleSummarize = async () => {
   status.value = { type: 'info', text: 'AI 正在读取系统数据并生成总结，请稍候...' }
   summary.value = ''
   try {
-    const resp = await api.post('/ai/summarize/', {
-      query: query.value,
-      content: content.value,
-      template_key: templateKey.value,
-      data_scope: dataScope.value
-    })
+    // 全局 axios 默认 10s，总结接口后端可能全量+重试，需单独拉长（否则 Network 显示无响应标头、状态为 —）
+    const resp = await api.post(
+      '/ai/summarize/',
+      {
+        query: query.value,
+        content: content.value,
+        template_key: templateKey.value,
+        data_scope: dataScope.value,
+      },
+      { timeout: 240000 }
+    )
     summary.value = resp.data?.summary || ''
     if (!summary.value) {
       status.value = { type: 'warning', text: 'AI 返回为空，请调整问题后重试。' }

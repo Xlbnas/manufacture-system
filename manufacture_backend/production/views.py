@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+import time
 from pathlib import Path
 from urllib import error, request as urlrequest
 
@@ -426,16 +427,17 @@ def ai_summarize_view(request):
             '输出要求': '请使用简体中文，结构化输出，避免编造不存在的数据。',
         }
 
-    user_payload = build_user_payload(compact=False)
-    payload = {
-        'model': model,
-        'messages': [
-            {'role': 'system', 'content': f"你是工厂管理系统的数据分析助手。{prompt}"},
-            {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False, default=str)},
-        ],
-        'temperature': 0.3,
-        'max_tokens': 1200,
-    }
+    def build_api_payload(compact=False):
+        user_payload = build_user_payload(compact=compact)
+        return {
+            'model': model,
+            'messages': [
+                {'role': 'system', 'content': f"你是工厂管理系统的数据分析助手。{prompt}"},
+                {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False, default=str)},
+            ],
+            'temperature': 0.2 if compact else 0.3,
+            'max_tokens': 900 if compact else 1200,
+        }
 
     def call_ai(api_payload):
         req = urlrequest.Request(
@@ -447,38 +449,102 @@ def ai_summarize_view(request):
             },
             method='POST',
         )
-        with urlrequest.urlopen(req, timeout=90) as resp:
+        with urlrequest.urlopen(req, timeout=120) as resp:
             return json.loads(resp.read().decode('utf-8'))
 
+    def extract_summary(body):
+        if not isinstance(body, dict):
+            return '', None
+        choices = body.get('choices') or []
+        if not choices:
+            return '', None
+        c0 = choices[0] or {}
+        msg = c0.get('message') or {}
+        raw = msg.get('content')
+        if raw is None:
+            text = ''
+        elif isinstance(raw, str):
+            text = raw.strip()
+        elif isinstance(raw, list):
+            parts = []
+            for p in raw:
+                if isinstance(p, dict) and p.get('type') == 'text':
+                    parts.append((p.get('text') or '').strip())
+                elif isinstance(p, str):
+                    parts.append(p.strip())
+            text = '\n'.join(x for x in parts if x).strip()
+        else:
+            text = str(raw).strip()
+        return text, c0.get('finish_reason')
+
+    payload_full = build_api_payload(compact=False)
+    payload_compact = build_api_payload(compact=True)
+    body = None
+    summary = ''
+    finish_reason = None
+    attempted_compact = False
+
+    def try_compact_after_failure(reason_http=None):
+        nonlocal body, summary, finish_reason, attempted_compact
+        attempted_compact = True
+        if reason_http == 429:
+            time.sleep(0.6)
+        try:
+            body = call_ai(payload_compact)
+            summary, finish_reason = extract_summary(body)
+        except error.HTTPError as exc2:
+            detail2 = exc2.read().decode('utf-8', errors='ignore')
+            raise RuntimeError(detail2 or exc2.reason) from exc2
+        except (socket.timeout, TimeoutError) as exc2:
+            raise TimeoutError from exc2
+
     try:
-        body = call_ai(payload)
+        body = call_ai(payload_full)
+        summary, finish_reason = extract_summary(body)
     except error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='ignore')
-        return Response({'error': f'AI 服务调用失败: {detail or exc.reason}'}, status=status.HTTP_502_BAD_GATEWAY)
+        if exc.code in (429, 502, 503, 504):
+            try:
+                try_compact_after_failure(reason_http=exc.code)
+            except TimeoutError:
+                return Response(
+                    {'error': 'AI 服务超时，请重试或缩小数据范围（如选择“出库/仓库”）'},
+                    status=status.HTTP_504_GATEWAY_TIMEOUT,
+                )
+            except Exception as exc2:
+                return Response(
+                    {'error': f'AI 服务调用失败（已用压缩数据重试）: {detail or exc.reason}；重试错误: {exc2}'},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+        else:
+            return Response({'error': f'AI 服务调用失败: {detail or exc.reason}'}, status=status.HTTP_502_BAD_GATEWAY)
     except (socket.timeout, TimeoutError):
-        # 超时后使用压缩上下文重试一次
-        compact_payload = {
-            'model': model,
-            'messages': [
-                {'role': 'system', 'content': f"你是工厂管理系统的数据分析助手。{prompt}"},
-                {'role': 'user', 'content': json.dumps(build_user_payload(compact=True), ensure_ascii=False, default=str)},
-            ],
-            'temperature': 0.2,
-            'max_tokens': 900,
-        }
         try:
-            body = call_ai(compact_payload)
-        except Exception:
-            return Response({'error': 'AI 服务超时，请重试或缩小数据范围（如选择“出库/仓库”）'}, status=status.HTTP_504_GATEWAY_TIMEOUT)
+            try_compact_after_failure()
+        except TimeoutError:
+            return Response(
+                {'error': 'AI 服务超时，请重试或缩小数据范围（如选择“出库/仓库”）'},
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
+            )
+        except Exception as exc:
+            return Response({'error': f'AI 服务调用异常: {exc}'}, status=status.HTTP_502_BAD_GATEWAY)
     except Exception as exc:
         return Response({'error': f'AI 服务调用异常: {exc}'}, status=status.HTTP_502_BAD_GATEWAY)
 
-    summary = ''
-    choices = body.get('choices') or []
-    if choices:
-        summary = ((choices[0] or {}).get('message') or {}).get('content', '').strip()
+    if not summary and body is not None and not attempted_compact:
+        try:
+            try_compact_after_failure()
+        except Exception:
+            pass
+
     if not summary:
-        return Response({'error': 'AI 服务返回为空'}, status=status.HTTP_502_BAD_GATEWAY)
+        hint = '请重试或缩小数据范围（如选择“出库/仓库”）。'
+        if finish_reason:
+            return Response(
+                {'error': f'AI 服务返回为空（finish_reason={finish_reason}），{hint}'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response({'error': f'AI 服务返回为空，{hint}'}, status=status.HTTP_502_BAD_GATEWAY)
 
     return Response({'summary': summary, 'used_scope': data_scope, 'template_key': template_key}, status=status.HTTP_200_OK)
 

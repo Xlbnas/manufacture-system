@@ -202,9 +202,7 @@ html, body {
   color: var(--text-color);
 }
 
-.dark-mode span {
-  color: var(--text-color);
-}
+/* 勿对全局 span 强制上色：会破坏 el-tag--light、el-input__count 等与浅色底的对比度（由 body 继承即可） */
 
 .dark-mode h1, .dark-mode h2, .dark-mode h3, .dark-mode h4, .dark-mode h5, .dark-mode h6 {
   color: var(--text-color);
@@ -274,6 +272,11 @@ html, body {
 .dark-mode .el-textarea__inner:focus {
   border-color: #66b1ff !important;
   box-shadow: 0 0 0 1px #66b1ff inset !important;
+}
+
+.dark-mode .el-input__count {
+  color: #a8b0bd;
+  background: transparent;
 }
 
 .dark-mode .el-select__wrapper {
