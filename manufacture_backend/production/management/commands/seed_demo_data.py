@@ -28,6 +28,7 @@ from production.models import (
     TransferOrderItem,
     Warehouse,
     WarehouseNode,
+    WeavingOrder,
 )
 
 
@@ -37,6 +38,7 @@ DEMO = "【演示】"
 def _clear_demo():
     TransferOrderItem.objects.filter(transfer_order__note__startswith=DEMO).delete()
     TransferOrder.objects.filter(note__startswith=DEMO).delete()
+    WeavingOrder.objects.filter(supplier__name__startswith=DEMO).delete()
     DyeingOrder.objects.filter(raw_material__name__startswith=DEMO).delete()
     Warehouse.objects.filter(product__name__startswith=DEMO).delete()
     ProductionPlanDetail.objects.filter(name__startswith=DEMO).delete()
@@ -123,6 +125,7 @@ class Command(BaseCommand):
             sup_acc = Supplier.objects.create(name=f"{DEMO}辅料-华盛织带", type="辅料")
             sup_raw = Supplier.objects.create(name=f"{DEMO}坯布-联纺纺织", type="坯布")
             sup_dye = Supplier.objects.create(name=f"{DEMO}染厂-江南印染", type="染厂")
+            sup_weave = Supplier.objects.create(name=f"{DEMO}布厂-联织布业", type="布厂")
 
             wh_factory = WarehouseNode.objects.create(
                 name=f"{DEMO}武昌工厂仓",
@@ -240,7 +243,7 @@ class Command(BaseCommand):
                 ],
             )
 
-            # 染色单草稿（可在后台或后续前端扩展中点「完成」试扣坯布、生成染色布）
+            # 染色单草稿（在「外协订单」登记到货或整单收齐）
             DyeingOrder.objects.create(
                 raw_material=raw,
                 supplier=sup_dye,
@@ -249,6 +252,18 @@ class Command(BaseCommand):
                 quantity=Decimal("400.00"),
                 output_warehouse=wh_factory,
                 status="draft",
+            )
+
+            WeavingOrder.objects.create(
+                supplier=sup_weave,
+                fabric_name=f"{DEMO}外协坯布-格子",
+                fabric_color="本白",
+                quantity=Decimal("500.00"),
+                unit="米",
+                inbound_warehouse=wh_factory,
+                expected_delivery=timezone.now().date(),
+                status="draft",
+                note="演示布厂单，可在外协订单页登记到货",
             )
 
             order = TransferOrder.objects.create(

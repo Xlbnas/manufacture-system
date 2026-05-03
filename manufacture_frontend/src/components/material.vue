@@ -287,11 +287,15 @@ const openPreview = (row) => {
 }
 
 const createDyeingOrder = async () => {
-  const { data } = await api.post('/dyeing-orders/', dyeForm.value)
-  await api.post(`/dyeing-orders/${data.id}/complete/`)
-  dyeDialogVisible.value = false
-  await load()
-  ElMessage.success('染色单已完成并入库')
+  try {
+    await api.post('/dyeing-orders/', dyeForm.value)
+    dyeDialogVisible.value = false
+    await load()
+    ElMessage.success('染色单已创建为草稿，请到「外协订单」登记到货或整单收齐')
+  } catch (e) {
+    const msg = e?.response?.data ? JSON.stringify(e.response.data) : e?.message
+    ElMessage.error(msg || '创建失败')
+  }
 }
 
 onMounted(load)
@@ -306,6 +310,7 @@ onMounted(load)
           <div>
             <el-button type="primary" @click="openMaterialDialog">物料入库</el-button>
             <el-button type="warning" @click="dyeDialogVisible = true">新建染色单</el-button>
+            <el-button type="success" plain @click="router.push('/mill-orders')">外协订单（到货）</el-button>
           </div>
         </div>
       </template>
@@ -366,11 +371,18 @@ onMounted(load)
       <el-table :data="dyeingOrders" size="small">
         <el-table-column prop="id" label="编号" width="90" />
         <el-table-column prop="output_name" label="染色布" />
-        <el-table-column label="计划输出色" width="120">
+        <el-table-column label="颜色" width="100">
           <template #default="{ row }">{{ row.output_color }}</template>
         </el-table-column>
-        <el-table-column prop="quantity" label="数量" width="120" />
-        <el-table-column prop="status" label="状态" width="120" />
+        <el-table-column prop="quantity" label="约定" width="88" />
+        <el-table-column prop="received_quantity" label="已到货" width="88" />
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            {{
+              { draft: '草稿', receiving: '到货中', completed: '已完成', cancelled: '已取消' }[row.status] || row.status
+            }}
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
@@ -512,7 +524,9 @@ onMounted(load)
           </el-select>
         </el-form-item>
       </el-form>
-      <template #footer><el-button type="primary" @click="createDyeingOrder">创建并执行</el-button></template>
+      <template #footer>
+        <el-button type="primary" @click="createDyeingOrder">保存为草稿</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>

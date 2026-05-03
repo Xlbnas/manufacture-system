@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from .models import (
     DyeingOrder,
+    DyeingReceipt,
     Factory,
     Material,
     Product,
@@ -13,6 +14,8 @@ from .models import (
     TransferOrderItem,
     Warehouse,
     WarehouseNode,
+    WeavingOrder,
+    WeavingReceipt,
 )
 
 
@@ -122,21 +125,93 @@ class ProductionPlanDetailSerializer(serializers.ModelSerializer):
         ]
 
 
+class DyeingReceiptSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DyeingReceipt
+        fields = ['id', 'quantity', 'receipt_date', 'note', 'created_at']
+
+
+class WeavingReceiptSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WeavingReceipt
+        fields = ['id', 'quantity', 'receipt_date', 'note', 'created_at']
+
+
+class OutsourceReceiptWriteSerializer(serializers.Serializer):
+    """登记一笔到货：数量、日期（默认可由视图填当天）、备注。"""
+    quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
+    receipt_date = serializers.DateField(required=False, allow_null=True)
+    note = serializers.CharField(required=False, allow_blank=True, default='')
+
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('数量须大于 0')
+        return value
+
+
 class DyeingOrderSerializer(serializers.ModelSerializer):
     raw_material = MaterialDetailSerializer(read_only=True)
-    raw_material_id = serializers.PrimaryKeyRelatedField(queryset=Material.objects.all(), source='raw_material', write_only=True)
+    raw_material_id = serializers.PrimaryKeyRelatedField(
+        queryset=Material.objects.filter(type='raw_fabric'),
+        source='raw_material',
+        write_only=True,
+    )
     supplier = SupplierSerializer(read_only=True)
-    supplier_id = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.all(), source='supplier', write_only=True)
+    supplier_id = serializers.PrimaryKeyRelatedField(
+        queryset=Supplier.objects.filter(type='染厂'),
+        source='supplier',
+        write_only=True,
+    )
     output_warehouse = WarehouseNodeSerializer(read_only=True)
-    output_warehouse_id = serializers.PrimaryKeyRelatedField(queryset=WarehouseNode.objects.all(), source='output_warehouse', write_only=True)
+    output_warehouse_id = serializers.PrimaryKeyRelatedField(
+        queryset=WarehouseNode.objects.all(),
+        source='output_warehouse',
+        write_only=True,
+    )
+    receipts = DyeingReceiptSerializer(many=True, read_only=True)
+    remaining_quantity = serializers.SerializerMethodField()
 
     class Meta:
         model = DyeingOrder
         fields = [
             'id', 'raw_material', 'raw_material_id', 'supplier', 'supplier_id', 'output_name', 'output_color',
-            'quantity', 'output_warehouse', 'output_warehouse_id', 'status', 'dyed_material', 'created_at'
+            'quantity', 'received_quantity', 'remaining_quantity', 'receipts',
+            'output_warehouse', 'output_warehouse_id', 'status', 'dyed_material', 'created_at',
         ]
-        read_only_fields = ['status', 'dyed_material', 'created_at']
+        read_only_fields = ['status', 'received_quantity', 'dyed_material', 'created_at']
+
+    def get_remaining_quantity(self, obj):
+        return obj.quantity - obj.received_quantity
+
+
+class WeavingOrderSerializer(serializers.ModelSerializer):
+    supplier = SupplierSerializer(read_only=True)
+    supplier_id = serializers.PrimaryKeyRelatedField(
+        queryset=Supplier.objects.filter(type='布厂'),
+        source='supplier',
+        write_only=True,
+    )
+    inbound_warehouse = WarehouseNodeSerializer(read_only=True)
+    inbound_warehouse_id = serializers.PrimaryKeyRelatedField(
+        queryset=WarehouseNode.objects.all(),
+        source='inbound_warehouse',
+        write_only=True,
+    )
+    raw_material = MaterialDetailSerializer(read_only=True)
+    receipts = WeavingReceiptSerializer(many=True, read_only=True)
+    remaining_quantity = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WeavingOrder
+        fields = [
+            'id', 'supplier', 'supplier_id', 'fabric_name', 'fabric_color', 'quantity', 'received_quantity',
+            'remaining_quantity', 'receipts', 'unit', 'inbound_warehouse', 'inbound_warehouse_id',
+            'expected_delivery', 'status', 'raw_material', 'note', 'created_at',
+        ]
+        read_only_fields = ['status', 'received_quantity', 'raw_material', 'created_at']
+
+    def get_remaining_quantity(self, obj):
+        return obj.quantity - obj.received_quantity
 
 
 class TransferOrderItemSerializer(serializers.ModelSerializer):

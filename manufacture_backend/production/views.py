@@ -2,6 +2,7 @@ import json
 import os
 import socket
 import time
+from decimal import Decimal
 from pathlib import Path
 from urllib import error, request as urlrequest
 
@@ -11,6 +12,7 @@ from django.db import transaction
 from django.db.models import F
 from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from rest_framework import serializers, status, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.decorators import action, api_view, permission_classes
@@ -19,6 +21,7 @@ from rest_framework.response import Response
 
 from .models import (
     DyeingOrder,
+    DyeingReceipt,
     Factory,
     Material,
     Product,
@@ -29,12 +32,15 @@ from .models import (
     TransferOrder,
     Warehouse,
     WarehouseNode,
+    WeavingOrder,
+    WeavingReceipt,
 )
 from .serializers import (
     DyeingOrderSerializer,
     FactorySerializer,
     MaterialDetailSerializer,
     MaterialSerializer,
+    OutsourceReceiptWriteSerializer,
     ProductSerializer,
     ProductionPlanDetailSerializer,
     ProductionPlanSerializer,
@@ -44,6 +50,7 @@ from .serializers import (
     WarehouseDetailSerializer,
     WarehouseNodeSerializer,
     WarehouseSerializer,
+    WeavingOrderSerializer,
 )
 from .backup_utils import (
     BackupError,
@@ -53,6 +60,141 @@ from .backup_utils import (
     inspect_backup_archive,
     restore_backup_archive,
 )
+
+
+def _to_decimal(value):
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def _apply_dyeing_receipt(order_id, qty, receipt_date, note=''):
+    """事务内：登记染色到货；本批米数 1:1 扣坯布、累加染色布库存行。"""
+    note = note or ''
+    qty = _to_decimal(qty)
+    with transaction.atomic():
+        order = (
+            DyeingOrder.objects.select_for_update()
+            .select_related('raw_material', 'supplier', 'output_warehouse')
+            .get(pk=order_id)
+        )
+        if order.status not in ('draft', 'receiving'):
+            raise ValueError('当前状态不可登记到货')
+        remaining = _to_decimal(order.quantity) - _to_decimal(order.received_quantity)
+        if qty <= 0:
+            raise ValueError('到货数量须大于 0')
+        if qty > remaining:
+            raise ValueError('超过可收货数量')
+
+        raw = Material.objects.select_for_update().get(pk=order.raw_material_id)
+        if _to_decimal(raw.quantity) < qty:
+            raise ValueError('坯布库存不足')
+
+        Material.objects.filter(pk=raw.id).update(quantity=F('quantity') - qty)
+
+        if order.dyed_material_id:
+            Material.objects.filter(pk=order.dyed_material_id).update(
+                quantity=F('quantity') + qty,
+                stock_date=receipt_date,
+            )
+        else:
+            dyed = Material.objects.create(
+                type='dyed_fabric',
+                name=order.output_name,
+                color=order.output_color,
+                quantity=qty,
+                unit=raw.unit,
+                stock_date=receipt_date,
+                supplier=order.supplier,
+                warehouse=order.output_warehouse,
+                source_material=raw,
+                remark=f'由染色单#{order.id}生成',
+            )
+            order.dyed_material_id = dyed.id
+
+        DyeingReceipt.objects.create(
+            order_id=order.id,
+            quantity=qty,
+            receipt_date=receipt_date,
+            note=note,
+        )
+        new_received = _to_decimal(order.received_quantity) + qty
+        order.received_quantity = new_received
+        if new_received >= _to_decimal(order.quantity):
+            order.status = 'completed'
+        elif order.status == 'draft':
+            order.status = 'receiving'
+        order.save(update_fields=['received_quantity', 'status', 'dyed_material_id'])
+
+
+def _apply_weaving_receipt(order_id, qty, receipt_date, note=''):
+    """事务内：登记布厂到货；累加 raw_fabric 库存（合并同键行）。"""
+    note = note or ''
+    qty = _to_decimal(qty)
+    with transaction.atomic():
+        order = (
+            WeavingOrder.objects.select_for_update()
+            .select_related('supplier', 'inbound_warehouse')
+            .get(pk=order_id)
+        )
+        if order.status not in ('draft', 'receiving'):
+            raise ValueError('当前状态不可登记到货')
+        remaining = _to_decimal(order.quantity) - _to_decimal(order.received_quantity)
+        if qty <= 0:
+            raise ValueError('到货数量须大于 0')
+        if qty > remaining:
+            raise ValueError('超过可收货数量')
+
+        if order.raw_material_id:
+            Material.objects.filter(pk=order.raw_material_id).update(
+                quantity=F('quantity') + qty,
+                stock_date=receipt_date,
+            )
+        else:
+            match = (
+                Material.objects.select_for_update()
+                .filter(
+                    type='raw_fabric',
+                    name=order.fabric_name,
+                    color=order.fabric_color or '',
+                    warehouse_id=order.inbound_warehouse_id,
+                    supplier_id=order.supplier_id,
+                )
+                .first()
+            )
+            if match:
+                Material.objects.filter(pk=match.id).update(
+                    quantity=F('quantity') + qty,
+                    stock_date=receipt_date,
+                )
+                order.raw_material_id = match.id
+            else:
+                m = Material.objects.create(
+                    type='raw_fabric',
+                    name=order.fabric_name,
+                    color=order.fabric_color or '',
+                    quantity=qty,
+                    unit=order.unit,
+                    stock_date=receipt_date,
+                    supplier=order.supplier,
+                    warehouse=order.inbound_warehouse,
+                    remark=f'由布厂单#{order.id}入库',
+                )
+                order.raw_material_id = m.id
+
+        WeavingReceipt.objects.create(
+            order_id=order.id,
+            quantity=qty,
+            receipt_date=receipt_date,
+            note=note,
+        )
+        new_received = _to_decimal(order.received_quantity) + qty
+        order.received_quantity = new_received
+        if new_received >= _to_decimal(order.quantity):
+            order.status = 'completed'
+        elif order.status == 'draft':
+            order.status = 'receiving'
+        order.save(update_fields=['received_quantity', 'status', 'raw_material_id'])
 
 
 def _get_stock(warehouse, product, color, size):
@@ -98,36 +240,94 @@ class MaterialViewSet(viewsets.ModelViewSet):
 
 
 class DyeingOrderViewSet(viewsets.ModelViewSet):
-    queryset = DyeingOrder.objects.all().order_by('-id')
+    queryset = DyeingOrder.objects.all().select_related(
+        'raw_material', 'supplier', 'output_warehouse', 'dyed_material'
+    ).prefetch_related('receipts').order_by('-id')
     serializer_class = DyeingOrderSerializer
+
+    @action(detail=True, methods=['post'], url_path='receipts')
+    def receipts(self, request, pk=None):
+        order = self.get_object()
+        ser = OutsourceReceiptWriteSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        rd = ser.validated_data.get('receipt_date') or timezone.now().date()
+        try:
+            _apply_dyeing_receipt(
+                order.id,
+                ser.validated_data['quantity'],
+                rd,
+                ser.validated_data.get('note') or '',
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        order.refresh_from_db()
+        return Response(DyeingOrderSerializer(order).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        """兼容旧流程：一次性收齐剩余数量（等价于一笔到货）。"""
+        order = self.get_object()
+        remaining = _to_decimal(order.quantity) - _to_decimal(order.received_quantity)
+        if remaining <= 0:
+            return Response({'error': '已无剩余可收货量'}, status=status.HTTP_400_BAD_REQUEST)
+        if order.status not in ('draft', 'receiving'):
+            return Response({'error': '当前状态不可执行'}, status=status.HTTP_400_BAD_REQUEST)
+        raw_date = request.data.get('receipt_date')
+        receipt_date = parse_date(str(raw_date)) if raw_date else timezone.now().date()
+        if receipt_date is None:
+            receipt_date = timezone.now().date()
+        note = (request.data.get('note') or '').strip() or '整单收货'
+        try:
+            _apply_dyeing_receipt(order.id, remaining, receipt_date, note=note)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        order.refresh_from_db()
+        return Response(DyeingOrderSerializer(order).data)
+
+
+class WeavingOrderViewSet(viewsets.ModelViewSet):
+    queryset = WeavingOrder.objects.all().select_related(
+        'supplier', 'inbound_warehouse', 'raw_material'
+    ).prefetch_related('receipts').order_by('-id')
+    serializer_class = WeavingOrderSerializer
+
+    @action(detail=True, methods=['post'], url_path='receipts')
+    def receipts(self, request, pk=None):
+        order = self.get_object()
+        ser = OutsourceReceiptWriteSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        rd = ser.validated_data.get('receipt_date') or timezone.now().date()
+        try:
+            _apply_weaving_receipt(
+                order.id,
+                ser.validated_data['quantity'],
+                rd,
+                ser.validated_data.get('note') or '',
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        order.refresh_from_db()
+        return Response(WeavingOrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         order = self.get_object()
-        if order.status != 'draft':
-            return Response({'error': '仅草稿状态可执行'}, status=status.HTTP_400_BAD_REQUEST)
-        if order.raw_material.quantity < order.quantity:
-            return Response({'error': '坯布库存不足'}, status=status.HTTP_400_BAD_REQUEST)
-
-        with transaction.atomic():
-            Material.objects.filter(pk=order.raw_material_id).update(quantity=F('quantity') - order.quantity)
-            dyed = Material.objects.create(
-                type='dyed_fabric',
-                name=order.output_name,
-                color=order.output_color,
-                quantity=order.quantity,
-                unit=order.raw_material.unit,
-                stock_date=timezone.now().date(),
-                supplier=order.supplier,
-                warehouse=order.output_warehouse,
-                source_material=order.raw_material,
-                remark=f'由染色单#{order.id}生成'
-            )
-            order.status = 'completed'
-            order.dyed_material = dyed
-            order.save(update_fields=['status', 'dyed_material'])
-
-        return Response({'message': '染色完成', 'dyed_material_id': dyed.id})
+        remaining = _to_decimal(order.quantity) - _to_decimal(order.received_quantity)
+        if remaining <= 0:
+            return Response({'error': '已无剩余可收货量'}, status=status.HTTP_400_BAD_REQUEST)
+        if order.status not in ('draft', 'receiving'):
+            return Response({'error': '当前状态不可执行'}, status=status.HTTP_400_BAD_REQUEST)
+        raw_date = request.data.get('receipt_date')
+        receipt_date = parse_date(str(raw_date)) if raw_date else timezone.now().date()
+        if receipt_date is None:
+            receipt_date = timezone.now().date()
+        note = (request.data.get('note') or '').strip() or '整单收货'
+        try:
+            _apply_weaving_receipt(order.id, remaining, receipt_date, note=note)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        order.refresh_from_db()
+        return Response(WeavingOrderSerializer(order).data)
 
 
 class ProductViewSet(viewsets.ModelViewSet):

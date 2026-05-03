@@ -6,6 +6,7 @@ from .views import (
     WarehouseNodeViewSet,
     MaterialViewSet,
     DyeingOrderViewSet,
+    WeavingOrderViewSet,
     ProductViewSet,
     ProductionPlanViewSet,
     ProductionPlanDetailViewSet,
@@ -28,6 +29,7 @@ router.register(r'factories', FactoryViewSet)
 router.register(r'warehouse-nodes', WarehouseNodeViewSet)
 router.register(r'materials', MaterialViewSet)
 router.register(r'dyeing-orders', DyeingOrderViewSet)
+router.register(r'weaving-orders', WeavingOrderViewSet)
 router.register(r'products', ProductViewSet)
 router.register(r'production-plans', ProductionPlanViewSet)
 router.register(r'production-plan-details', ProductionPlanDetailViewSet)

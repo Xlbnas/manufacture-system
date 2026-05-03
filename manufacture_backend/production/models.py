@@ -23,6 +23,7 @@ class Supplier(models.Model):
         ('辅料', '辅料'),
         ('坯布', '坯布'),
         ('染厂', '染厂'),
+        ('布厂', '布厂'),
     )
     name = models.CharField(max_length=100, verbose_name='供应商名称')
     type = models.CharField(max_length=10, choices=SUPPLIER_TYPE_CHOICES, verbose_name='供应商类型')
@@ -93,6 +94,7 @@ class Material(models.Model):
 class DyeingOrder(models.Model):
     STATUS_CHOICES = (
         ('draft', '草稿'),
+        ('receiving', '到货中'),
         ('completed', '已完成'),
         ('cancelled', '已取消'),
     )
@@ -100,7 +102,10 @@ class DyeingOrder(models.Model):
     supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, related_name='dyeing_orders', verbose_name='染厂')
     output_name = models.CharField(max_length=100, verbose_name='染色布名称')
     output_color = models.CharField(max_length=50, verbose_name='颜色')
-    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='数量')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='约定产量')
+    received_quantity = models.DecimalField(
+        max_digits=12, decimal_places=2, verbose_name='已到货数量', default=Decimal('0.00')
+    )
     output_warehouse = models.ForeignKey(WarehouseNode, on_delete=models.PROTECT, verbose_name='入库仓')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', verbose_name='状态')
     dyed_material = models.ForeignKey(Material, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_by_dyeing_order')
@@ -112,6 +117,65 @@ class DyeingOrder(models.Model):
     class Meta:
         verbose_name = '染色单'
         verbose_name_plural = '染色单'
+
+
+class DyeingReceipt(models.Model):
+    """染色单分批到货；每批按与到货米数 1:1 扣减坯布库存（与整单完成逻辑一致）。"""
+    order = models.ForeignKey(DyeingOrder, on_delete=models.CASCADE, related_name='receipts', verbose_name='染色单')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='本批到货米数')
+    receipt_date = models.DateField(verbose_name='到货日期')
+    note = models.CharField(max_length=255, blank=True, default='', verbose_name='备注')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = '染色到货记录'
+        verbose_name_plural = '染色到货记录'
+        ordering = ['-id']
+
+
+class WeavingOrder(models.Model):
+    STATUS_CHOICES = DyeingOrder.STATUS_CHOICES
+    supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, related_name='weaving_orders', verbose_name='布厂')
+    fabric_name = models.CharField(max_length=100, verbose_name='布料名称')
+    fabric_color = models.CharField(max_length=50, verbose_name='颜色', blank=True, default='')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='约定产量')
+    received_quantity = models.DecimalField(
+        max_digits=12, decimal_places=2, verbose_name='已到货数量', default=Decimal('0.00')
+    )
+    unit = models.CharField(max_length=10, verbose_name='单位', default='米')
+    inbound_warehouse = models.ForeignKey(WarehouseNode, on_delete=models.PROTECT, verbose_name='入库仓')
+    expected_delivery = models.DateField(verbose_name='预计交期', blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', verbose_name='状态')
+    raw_material = models.ForeignKey(
+        Material,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_by_weaving_order',
+        verbose_name='汇总坯布库存行',
+    )
+    note = models.CharField(max_length=255, blank=True, default='', verbose_name='备注')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'布厂单#{self.id}'
+
+    class Meta:
+        verbose_name = '布厂外协单'
+        verbose_name_plural = '布厂外协单'
+
+
+class WeavingReceipt(models.Model):
+    order = models.ForeignKey(WeavingOrder, on_delete=models.CASCADE, related_name='receipts', verbose_name='布厂单')
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='本批到货米数')
+    receipt_date = models.DateField(verbose_name='到货日期')
+    note = models.CharField(max_length=255, blank=True, default='', verbose_name='备注')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = '布厂到货记录'
+        verbose_name_plural = '布厂到货记录'
+        ordering = ['-id']
 
 
 class Product(models.Model):

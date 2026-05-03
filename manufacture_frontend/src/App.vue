@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { PieChart, OfficeBuilding, Box, Refresh, Goods, Moon, Sunny, HomeFilled, User, SwitchButton, Wallet, ChatDotRound, FolderChecked } from '@element-plus/icons-vue'
+import { PieChart, OfficeBuilding, Box, Refresh, Goods, Moon, Sunny, HomeFilled, User, SwitchButton, Wallet, ChatDotRound, FolderChecked, Van } from '@element-plus/icons-vue'
 import { useAuthStore } from './stores/auth.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -102,6 +102,10 @@ onMounted(() => {
           <el-menu-item index="material">
             <el-icon><Box /></el-icon>
             <span>材料溯源</span>
+          </el-menu-item>
+          <el-menu-item index="mill-orders">
+            <el-icon><Van /></el-icon>
+            <span>外协订单</span>
           </el-menu-item>
           <el-menu-item index="production">
             <el-icon><Refresh /></el-icon>
@@ -231,6 +235,10 @@ html, body {
 
 .dark-mode .el-table td {
   border-color: var(--border-color);
+}
+
+.dark-mode .el-aside {
+  background-color: var(--aside-bg) !important;
 }
 
 .dark-mode .el-menu {
@@ -685,10 +693,11 @@ html, body {
   min-width: 0;
 }
 
-/* 菜单样式 */
+/* 菜单随内容增高，避免滚动时露出 aside 与菜单底色差 */
 .el-menu-vertical-demo:not(.el-menu--collapse) {
   width: 200px;
-  height: 100%;
+  min-height: 100%;
+  height: auto !important;
   border-right: none !important;
 }
 
