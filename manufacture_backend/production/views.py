@@ -9,7 +9,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import transaction
 from django.db.models import F
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import serializers, status, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -264,6 +264,208 @@ def _resolve_ai_config():
     )
     return api_key, model, api_url, env_file
 
+
+_AI_TEMPLATE_PROMPTS = {
+    'general': '请基于给定系统数据与用户问题，输出简洁清晰的中文结论。',
+    'daily': '请按日报格式输出：今日关键进展、异常/风险、明日计划。',
+    'weekly': '请按周报格式输出：本周完成、问题与阻塞、下周计划。',
+    'risk': '请聚焦风险排查：问题清单、影响评估、优先级、建议动作。',
+}
+
+
+def _ai_template_instruction(template_key):
+    return _AI_TEMPLATE_PROMPTS.get(template_key, _AI_TEMPLATE_PROMPTS['general'])
+
+
+def _ai_build_system_context(data_scope, compact=False):
+    factory_limit = 80 if compact else 200
+    material_limit = 120 if compact else 300
+    product_limit = 80 if compact else 200
+    plan_limit = 120 if compact else 200
+    warehouse_limit = 120 if compact else 300
+    transfer_limit = 80 if compact else 200
+    context = {}
+    if data_scope in ('all', 'factory'):
+        context['factories'] = list(Factory.objects.values('id', 'name', 'location', 'workshop')[:factory_limit])
+    if data_scope in ('all', 'material'):
+        context['materials'] = list(
+            Material.objects.values('id', 'type', 'name', 'quantity', 'unit', 'stock_date').order_by('-id')[:material_limit]
+        )
+    if data_scope in ('all', 'product'):
+        context['products'] = list(Product.objects.values('id', 'name', 'colors', 'specifications')[:product_limit])
+    if data_scope in ('all', 'plan'):
+        context['production_plan_details'] = list(
+            ProductionPlanDetail.objects.values('id', 'date', 'plan_type', 'name', 'template', 'created_at').order_by('-created_at')[:plan_limit]
+        )
+    if data_scope in ('all', 'warehouse'):
+        context['warehouse'] = list(
+            Warehouse.objects.values('id', 'product_id', 'color', 'size', 'quantity', 'warehouse_id').order_by('-id')[:warehouse_limit]
+        )
+    if data_scope in ('all', 'outbound'):
+        context['transfer_orders'] = list(
+            TransferOrder.objects.values(
+                'id',
+                'from_warehouse__name',
+                'to_warehouse__name',
+                'status',
+                'note',
+                'created_at',
+                'completed_at',
+            ).order_by('-id')[:transfer_limit]
+        )
+    summary = {
+        'factory_count': Factory.objects.count(),
+        'material_count': Material.objects.count(),
+        'product_count': Product.objects.count(),
+        'plan_detail_count': ProductionPlanDetail.objects.count(),
+        'warehouse_record_count': Warehouse.objects.count(),
+        'transfer_order_count': TransferOrder.objects.count(),
+    }
+    return {'summary': summary, 'scope': data_scope, 'compact': compact, 'data': context}
+
+
+def _ai_build_user_payload(query, content, data_scope, compact):
+    system_context = _ai_build_system_context(data_scope, compact=compact)
+    return {
+        '用户问题': query or '请根据数据进行总结',
+        '用户补充文本': content or '',
+        '系统数据上下文': system_context,
+        '输出要求': '请使用简体中文，结构化输出，避免编造不存在的数据。',
+    }
+
+
+def _ai_build_api_payload(model, query, content, data_scope, template_key, compact=False, stream=False):
+    prompt = _ai_template_instruction(template_key)
+    user_payload = _ai_build_user_payload(query, content, data_scope, compact)
+    payload = {
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': f'你是工厂管理系统的数据分析助手。{prompt}'},
+            {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False, default=str)},
+        ],
+        'temperature': 0.2 if compact else 0.3,
+        'max_tokens': 900 if compact else 1200,
+    }
+    if stream:
+        payload['stream'] = True
+    return payload
+
+
+def _ai_extract_summary_from_body(body):
+    if not isinstance(body, dict):
+        return '', None
+    choices = body.get('choices') or []
+    if not choices:
+        return '', None
+    c0 = choices[0] or {}
+    msg = c0.get('message') or {}
+    raw = msg.get('content')
+    if raw is None:
+        text = ''
+    elif isinstance(raw, str):
+        text = raw.strip()
+    elif isinstance(raw, list):
+        parts = []
+        for p in raw:
+            if isinstance(p, dict) and p.get('type') == 'text':
+                parts.append((p.get('text') or '').strip())
+            elif isinstance(p, str):
+                parts.append(p.strip())
+        text = '\n'.join(x for x in parts if x).strip()
+    else:
+        text = str(raw).strip()
+    return text, c0.get('finish_reason')
+
+
+def _ai_call_sync_json(api_url, api_key, api_payload):
+    req = urlrequest.Request(
+        api_url,
+        data=json.dumps(api_payload, default=str).encode('utf-8'),
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+        method='POST',
+    )
+    with urlrequest.urlopen(req, timeout=120) as resp:
+        return json.loads(resp.read().decode('utf-8'))
+
+
+def _ai_sse_pack(obj):
+    return f'data: {json.dumps(obj, ensure_ascii=False, default=str)}\n\n'
+
+
+def _ai_upstream_stream_events(api_url, api_key, api_payload, read_timeout=300):
+    """Yields slim SSE lines: {\"t\": text}, {\"e\": msg}, then {\"d\": true} in finally.
+
+    SiliconFlow / 部分推理模型可能在较长时间内只通过 delta.reasoning_content 推流，
+    content 为空；若只转发 content 则前端长时间无数据直至超时。
+    """
+    try:
+        req = urlrequest.Request(
+            api_url,
+            data=json.dumps(api_payload, default=str).encode('utf-8'),
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Accept': 'text/event-stream',
+                'Content-Type': 'application/json',
+            },
+            method='POST',
+        )
+        with urlrequest.urlopen(req, timeout=read_timeout) as resp:
+            while True:
+                raw_line = resp.readline()
+                if not raw_line:
+                    break
+                line = raw_line.decode('utf-8', errors='replace').strip()
+                if not line or line.startswith(':'):
+                    continue
+                if not line.startswith('data:'):
+                    continue
+                data_str = line[5:].lstrip()
+                if data_str == '[DONE]':
+                    break
+                try:
+                    obj = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and obj.get('error'):
+                    err = obj['error']
+                    if isinstance(err, dict):
+                        err = err.get('message') or json.dumps(err, ensure_ascii=False)
+                    yield _ai_sse_pack({'e': str(err)})
+                    return
+                choices = obj.get('choices') or []
+                if not choices:
+                    continue
+                delta = (choices[0] or {}).get('delta') or {}
+                if not isinstance(delta, dict):
+                    continue
+                piece = delta.get('content')
+                if piece is None:
+                    piece = ''
+                elif not isinstance(piece, str):
+                    piece = str(piece)
+                reasoning = delta.get('reasoning_content')
+                if reasoning is None:
+                    reasoning = ''
+                elif not isinstance(reasoning, str):
+                    reasoning = str(reasoning)
+                if piece:
+                    yield _ai_sse_pack({'t': piece})
+                elif reasoning:
+                    yield _ai_sse_pack({'t': reasoning})
+    except error.HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='ignore')
+        yield _ai_sse_pack({'e': detail or str(exc.reason)})
+    except (socket.timeout, TimeoutError):
+        yield _ai_sse_pack({'e': 'AI 服务超时，请缩小数据范围后重试'})
+    except Exception as exc:
+        yield _ai_sse_pack({'e': str(exc)})
+    finally:
+        yield _ai_sse_pack({'d': True})
+
+
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -364,121 +566,8 @@ def ai_summarize_view(request):
     if not api_key:
         return Response({'error': '服务端未配置 AI API Key'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    template_prompts = {
-        'general': "请基于给定系统数据与用户问题，输出简洁清晰的中文结论。",
-        'daily': "请按日报格式输出：今日关键进展、异常/风险、明日计划。",
-        'weekly': "请按周报格式输出：本周完成、问题与阻塞、下周计划。",
-        'risk': "请聚焦风险排查：问题清单、影响评估、优先级、建议动作。",
-    }
-    prompt = template_prompts.get(template_key, template_prompts['general'])
-
-    def build_system_context(scope, compact=False):
-        factory_limit = 80 if compact else 200
-        material_limit = 120 if compact else 300
-        product_limit = 80 if compact else 200
-        plan_limit = 120 if compact else 200
-        warehouse_limit = 120 if compact else 300
-        transfer_limit = 80 if compact else 200
-        context = {}
-        if scope in ('all', 'factory'):
-            context['factories'] = list(Factory.objects.values('id', 'name', 'location', 'workshop')[:factory_limit])
-        if scope in ('all', 'material'):
-            context['materials'] = list(
-                Material.objects.values('id', 'type', 'name', 'quantity', 'unit', 'stock_date').order_by('-id')[:material_limit]
-            )
-        if scope in ('all', 'product'):
-            context['products'] = list(Product.objects.values('id', 'name', 'colors', 'specifications')[:product_limit])
-        if scope in ('all', 'plan'):
-            context['production_plan_details'] = list(
-                ProductionPlanDetail.objects.values('id', 'date', 'plan_type', 'name', 'template', 'created_at').order_by('-created_at')[:plan_limit]
-            )
-        if scope in ('all', 'warehouse'):
-            context['warehouse'] = list(
-                Warehouse.objects.values('id', 'product_id', 'color', 'size', 'quantity', 'warehouse_id').order_by('-id')[:warehouse_limit]
-            )
-        if scope in ('all', 'outbound'):
-            context['transfer_orders'] = list(
-                TransferOrder.objects.values(
-                    'id',
-                    'from_warehouse__name',
-                    'to_warehouse__name',
-                    'status',
-                    'note',
-                    'created_at',
-                    'completed_at',
-                ).order_by('-id')[:transfer_limit]
-            )
-        summary = {
-            'factory_count': Factory.objects.count(),
-            'material_count': Material.objects.count(),
-            'product_count': Product.objects.count(),
-            'plan_detail_count': ProductionPlanDetail.objects.count(),
-            'warehouse_record_count': Warehouse.objects.count(),
-            'transfer_order_count': TransferOrder.objects.count(),
-        }
-        return {'summary': summary, 'scope': scope, 'compact': compact, 'data': context}
-
-    def build_user_payload(compact=False):
-        system_context = build_system_context(data_scope, compact=compact)
-        return {
-            '用户问题': query or '请根据数据进行总结',
-            '用户补充文本': content or '',
-            '系统数据上下文': system_context,
-            '输出要求': '请使用简体中文，结构化输出，避免编造不存在的数据。',
-        }
-
-    def build_api_payload(compact=False):
-        user_payload = build_user_payload(compact=compact)
-        return {
-            'model': model,
-            'messages': [
-                {'role': 'system', 'content': f"你是工厂管理系统的数据分析助手。{prompt}"},
-                {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False, default=str)},
-            ],
-            'temperature': 0.2 if compact else 0.3,
-            'max_tokens': 900 if compact else 1200,
-        }
-
-    def call_ai(api_payload):
-        req = urlrequest.Request(
-            api_url,
-            data=json.dumps(api_payload, default=str).encode('utf-8'),
-            headers={
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json',
-            },
-            method='POST',
-        )
-        with urlrequest.urlopen(req, timeout=120) as resp:
-            return json.loads(resp.read().decode('utf-8'))
-
-    def extract_summary(body):
-        if not isinstance(body, dict):
-            return '', None
-        choices = body.get('choices') or []
-        if not choices:
-            return '', None
-        c0 = choices[0] or {}
-        msg = c0.get('message') or {}
-        raw = msg.get('content')
-        if raw is None:
-            text = ''
-        elif isinstance(raw, str):
-            text = raw.strip()
-        elif isinstance(raw, list):
-            parts = []
-            for p in raw:
-                if isinstance(p, dict) and p.get('type') == 'text':
-                    parts.append((p.get('text') or '').strip())
-                elif isinstance(p, str):
-                    parts.append(p.strip())
-            text = '\n'.join(x for x in parts if x).strip()
-        else:
-            text = str(raw).strip()
-        return text, c0.get('finish_reason')
-
-    payload_full = build_api_payload(compact=False)
-    payload_compact = build_api_payload(compact=True)
+    payload_full = _ai_build_api_payload(model, query, content, data_scope, template_key, compact=False, stream=False)
+    payload_compact = _ai_build_api_payload(model, query, content, data_scope, template_key, compact=True, stream=False)
     body = None
     summary = ''
     finish_reason = None
@@ -490,8 +579,8 @@ def ai_summarize_view(request):
         if reason_http == 429:
             time.sleep(0.6)
         try:
-            body = call_ai(payload_compact)
-            summary, finish_reason = extract_summary(body)
+            body = _ai_call_sync_json(api_url, api_key, payload_compact)
+            summary, finish_reason = _ai_extract_summary_from_body(body)
         except error.HTTPError as exc2:
             detail2 = exc2.read().decode('utf-8', errors='ignore')
             raise RuntimeError(detail2 or exc2.reason) from exc2
@@ -499,8 +588,8 @@ def ai_summarize_view(request):
             raise TimeoutError from exc2
 
     try:
-        body = call_ai(payload_full)
-        summary, finish_reason = extract_summary(body)
+        body = _ai_call_sync_json(api_url, api_key, payload_full)
+        summary, finish_reason = _ai_extract_summary_from_body(body)
     except error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='ignore')
         if exc.code in (429, 502, 503, 504):
@@ -547,6 +636,34 @@ def ai_summarize_view(request):
         return Response({'error': f'AI 服务返回为空，{hint}'}, status=status.HTTP_502_BAD_GATEWAY)
 
     return Response({'summary': summary, 'used_scope': data_scope, 'template_key': template_key}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def ai_summarize_stream_view(request):
+    query = (request.data.get('query') or '').strip()
+    content = (request.data.get('content') or '').strip()
+    template_key = (request.data.get('template_key') or 'general').strip()
+    data_scope = (request.data.get('data_scope') or 'all').strip()
+
+    if not query and not content:
+        return Response({'error': '请至少提供查询问题或待总结文本'}, status=status.HTTP_400_BAD_REQUEST)
+
+    api_key, model, api_url, _ = _resolve_ai_config()
+
+    if not api_key:
+        return Response({'error': '服务端未配置 AI API Key'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    stream_payload = _ai_build_api_payload(
+        model, query, content, data_scope, template_key, compact=False, stream=True
+    )
+    stream = StreamingHttpResponse(
+        _ai_upstream_stream_events(api_url, api_key, stream_payload),
+        content_type='text/event-stream; charset=utf-8',
+    )
+    stream['Cache-Control'] = 'no-cache'
+    stream['X-Accel-Buffering'] = 'no'
+    return stream
 
 
 @api_view(['GET', 'PUT'])

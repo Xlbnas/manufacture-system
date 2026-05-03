@@ -531,6 +531,23 @@ html, body {
   color: var(--text-color) !important;
 }
 
+/* AI 总结结果区：scoped 白底与 EP 顺序可能压过组件内暗色样式，用 id 提高优先级 */
+.dark-mode #ai-summary-markdown {
+  background-color: #2f343d !important;
+  border-color: #4a4f58 !important;
+  color: #e8eaed !important;
+}
+
+.dark-mode #ai-summary-markdown :is(p, li, h1, h2, h3, h4, strong, em, ul, ol) {
+  color: #e8eaed !important;
+  background-color: transparent !important;
+}
+
+.dark-mode #ai-summary-markdown :is(code, pre) {
+  background-color: #262a31 !important;
+  color: #dce1ea !important;
+}
+
 /* 表格单元格 */
 .dark-mode .el-table td {
   border-color: var(--border-color) !important;

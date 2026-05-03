@@ -15,6 +15,7 @@ from .views import (
 )
 from .views import (
     ai_config_view,
+    ai_summarize_stream_view,
     ai_summarize_view,
     backup_export_view,
     backup_inspect_view,
@@ -39,6 +40,7 @@ urlpatterns = [
     path('', include(router.urls)),
     # 当前用户信息
     path('auth/me/', me_view, name='me'),
+    path('ai/summarize/stream/', ai_summarize_stream_view, name='ai_summarize_stream'),
     path('ai/summarize/', ai_summarize_view, name='ai_summarize'),
     path('ai/config/', ai_config_view, name='ai_config'),
     path('system/backup/export/', backup_export_view, name='backup_export'),

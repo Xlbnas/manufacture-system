@@ -135,20 +135,30 @@
           style="margin-bottom: 12px"
         />
         <el-empty v-if="!summary && !loading" description="暂无结果" />
-        <div v-if="loading" class="summary-loading">
+        <div v-if="loading && !summary" class="summary-loading">
           <div v-for="line in 8" :key="line" class="loading-line" />
         </div>
-        <div v-if="summary && !loading" class="markdown-view" v-html="renderedSummary" />
+        <div
+          v-if="summary"
+          id="ai-summary-markdown"
+          class="markdown-view"
+          v-html="renderedSummary"
+        />
       </div>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../utils/axios.js'
+import { useAuthStore } from '../stores/auth.js'
 import { deleteWithUndo } from '../composables/deleteWithUndo.js'
+
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+const authStore = useAuthStore()
+let summarizeAbortController = null
 
 const STORAGE_KEY = 'ai_summary_history'
 
@@ -363,28 +373,128 @@ const saveConfig = async () => {
   }
 }
 
+/** 解析一块 SSE（以空行分隔事件），返回 { text?, error?, done? } */
+const parseSseBlock = (block) => {
+  const lines = block.split('\n')
+  for (const line of lines) {
+    const L = line.trim()
+    if (!L.startsWith('data:')) continue
+    const raw = L.startsWith('data: ') ? L.slice(6).trim() : L.slice(5).trim()
+    if (raw === '[DONE]') return { done: true }
+    try {
+      const o = JSON.parse(raw)
+      if (o.d) return { done: true }
+      if (o.e) return { error: String(o.e) }
+      if (o.t) return { text: String(o.t) }
+    } catch {
+      /* ignore non-JSON line */
+    }
+  }
+  return {}
+}
+
 const handleSummarize = async () => {
   if (!query.value.trim()) {
     ElMessage.warning('请先输入你要分析的问题')
     return
   }
+  summarizeAbortController?.abort()
+  summarizeAbortController = new AbortController()
+  const signal = summarizeAbortController.signal
+
   loading.value = true
   status.value = { type: 'info', text: 'AI 正在读取系统数据并生成总结，请稍候...' }
   summary.value = ''
+  let streamError = null
+
   try {
-    // 全局 axios 默认 10s，总结接口后端可能全量+重试，需单独拉长（否则 Network 显示无响应标头、状态为 —）
-    const resp = await api.post(
-      '/ai/summarize/',
-      {
+    const resp = await fetch(`${API_BASE}/ai/summarize/stream/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authStore.accessToken ? { Authorization: `Bearer ${authStore.accessToken}` } : {}),
+      },
+      body: JSON.stringify({
         query: query.value,
         content: content.value,
         template_key: templateKey.value,
         data_scope: dataScope.value,
-      },
-      { timeout: 240000 }
-    )
-    summary.value = resp.data?.summary || ''
-    if (!summary.value) {
+      }),
+      credentials: 'include',
+      signal,
+    })
+
+    if (!resp.ok) {
+      let msg = `请求失败 (${resp.status})`
+      try {
+        const j = await resp.json()
+        if (j?.error) msg = j.error
+      } catch {
+        /* 可能是 HTML 错误页 */
+      }
+      status.value = { type: 'error', text: msg }
+      ElMessage.error(msg)
+      return
+    }
+
+    const reader = resp.body?.getReader()
+    if (!reader) {
+      const msg = '浏览器不支持流式读取'
+      status.value = { type: 'error', text: msg }
+      ElMessage.error(msg)
+      return
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let closed = false
+
+    while (!closed) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() ?? ''
+      for (const part of parts) {
+        const trimmed = part.trim()
+        if (!trimmed) continue
+        const ev = parseSseBlock(trimmed)
+        if (ev.error) {
+          streamError = ev.error
+          closed = true
+          break
+        }
+        if (ev.text) {
+          summary.value += ev.text
+          if (status.value.type === 'info') {
+            status.value = { type: 'info', text: '正在输出总结（流式）…' }
+          }
+        }
+        if (ev.done) {
+          closed = true
+          break
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      const ev = parseSseBlock(buffer.trim())
+      if (ev.error) streamError = ev.error
+      if (ev.text) summary.value += ev.text
+    }
+
+    if (signal.aborted) {
+      status.value = { type: 'warning', text: '已取消生成' }
+      return
+    }
+
+    if (streamError) {
+      status.value = { type: 'error', text: streamError }
+      ElMessage.error(streamError)
+      return
+    }
+
+    if (!summary.value.trim()) {
       status.value = { type: 'warning', text: 'AI 返回为空，请调整问题后重试。' }
       ElMessage.warning('模型返回为空，请重试')
     } else {
@@ -396,21 +506,30 @@ const handleSummarize = async () => {
         dataScope: dataScope.value,
         query: query.value,
         content: content.value,
-        summary: summary.value
+        summary: summary.value,
       })
     }
   } catch (err) {
-    const msg = err?.response?.data?.error || '总结失败，请稍后重试'
+    if (err?.name === 'AbortError') {
+      status.value = { type: 'warning', text: '已取消生成' }
+      return
+    }
+    const msg = err?.message || '总结失败，请稍后重试'
     status.value = { type: 'error', text: msg }
     ElMessage.error(msg)
   } finally {
     loading.value = false
+    summarizeAbortController = null
   }
 }
 
 onMounted(async () => {
   loadHistory()
   await loadConfig()
+})
+
+onUnmounted(() => {
+  summarizeAbortController?.abort()
 })
 </script>
 
@@ -605,5 +724,40 @@ onMounted(async () => {
 :global(.dark-mode) .ai-summary-page .markdown-view :deep(pre) {
   background: #262a31;
   color: #e8eaed;
+}
+</style>
+
+<style>
+html.dark-mode #ai-summary-markdown {
+  background: #2f343d !important;
+  border-color: #4a4f58 !important;
+  color: #e8eaed !important;
+}
+
+html.dark-mode #ai-summary-markdown :is(h1, h2, h3, h4, p, li, strong, em, ul, ol) {
+  color: #e8eaed !important;
+  background-color: transparent !important;
+}
+
+html.dark-mode #ai-summary-markdown :is(code, pre) {
+  background: #262a31 !important;
+  color: #dce1ea !important;
+}
+
+html.dark-mode .ai-summary-page .header-tip {
+  color: #a8b0bd !important;
+}
+
+html.dark-mode .ai-summary-page .result-block > h3 {
+  color: #e8eaed !important;
+}
+
+html.dark-mode .ai-summary-page .history-item {
+  border-color: #4a4f58 !important;
+  background-color: #2c3038 !important;
+}
+
+html.dark-mode .ai-summary-page .history-query {
+  color: #f2f3f5 !important;
 }
 </style>
