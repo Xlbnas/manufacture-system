@@ -13,6 +13,7 @@ from datetime import timedelta
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from production.models import (
@@ -38,8 +39,13 @@ DEMO = "【演示】"
 def _clear_demo():
     TransferOrderItem.objects.filter(transfer_order__note__startswith=DEMO).delete()
     TransferOrder.objects.filter(note__startswith=DEMO).delete()
-    WeavingOrder.objects.filter(supplier__name__startswith=DEMO).delete()
-    DyeingOrder.objects.filter(raw_material__name__startswith=DEMO).delete()
+    # 外协单可能引用演示仓但物料名已改；按仓/供应商一并清掉，避免 PROTECT 阻止删 WarehouseNode
+    WeavingOrder.objects.filter(
+        Q(supplier__name__startswith=DEMO) | Q(inbound_warehouse__name__startswith=DEMO)
+    ).delete()
+    DyeingOrder.objects.filter(
+        Q(raw_material__name__startswith=DEMO) | Q(output_warehouse__name__startswith=DEMO)
+    ).delete()
     Warehouse.objects.filter(product__name__startswith=DEMO).delete()
     ProductionPlanDetail.objects.filter(name__startswith=DEMO).delete()
     ProductionProgress.objects.filter(plan__product__name__startswith=DEMO).delete()

@@ -1,3 +1,5 @@
+# 本地与 VPS 通用：数据库与附件在挂载目录 manufacture_backend/ 下持久化。
+# VPS 请在宿主机设置环境变量或通过 .env 传入：SECRET_KEY、ALLOWED_HOSTS、CORS_ALLOWED_ORIGINS、CSRF_TRUSTED_ORIGINS（HTTPS 时必填）。
 services:
   backend:
     build:
@@ -6,10 +8,11 @@ services:
     volumes:
       - ./manufacture_backend:/app
     environment:
-      - SECRET_KEY=your-secret-key-change-in-production
-      - DEBUG=False
-      - ALLOWED_HOSTS=backend,localhost,127.0.0.1
-      - DATABASE_URL=sqlite:///db.sqlite3
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - DEBUG=${DEBUG:-False}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-backend,localhost,127.0.0.1}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-}
     ports:
       - "9876:9876"
     # --timeout 须大于 AI 总结内 urlopen(120s) 及压缩重试，默认 30s 会导致 worker 被强杀 → 客户端收到 nginx 500 HTML

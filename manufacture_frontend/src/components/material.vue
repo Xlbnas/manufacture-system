@@ -82,8 +82,14 @@ const filteredSuppliers = computed(() => {
 })
 
 const mediaBase = () => {
-  const b = api.defaults.baseURL || ''
-  return b.replace(/\/api\/?$/, '') || 'http://127.0.0.1:9876'
+  const b = (api.defaults.baseURL || '').replace(/\/$/, '')
+  if (b.startsWith('http')) {
+    return b.replace(/\/api\/?$/, '') || b
+  }
+  if (typeof window !== 'undefined') {
+    return window.location.origin
+  }
+  return ''
 }
 
 const attachmentPublicUrl = (row) => {

@@ -442,12 +442,10 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Download, Plus, Delete, Edit, Setting, Upload } from '@element-plus/icons-vue'
 import * as ExcelJS from 'exceljs'
-import axios from 'axios'
+import api from '../utils/axios'
 import { useRoute } from 'vue-router'
-import { useAuthStore } from '../stores/auth.js'
 import ImportComponent from './ImportComponent.vue'
 
-const authStore = useAuthStore()
 const route = useRoute()
 
 // 模板数据 - 严格按照用户提供的数据
@@ -677,7 +675,7 @@ const extractMaterials = (payload) => {
 // 加载染色布库存（仅统计染色布可用库存）
 const loadClothInventory = async () => {
   try {
-    const response = await axios.get('http://127.0.0.1:9876/api/materials/')
+    const response = await api.get('materials/')
     const materials = extractMaterials(response.data)
     const inventory = {}
     materials.forEach(material => {
@@ -691,29 +689,6 @@ const loadClothInventory = async () => {
     clothInventory.value = inventory
   } catch (error) {
     console.error('获取染色布库存失败:', error)
-    // 处理认证错误
-    if (error.response?.status === 401) {
-      const refreshResult = await authStore.refreshToken()
-      if (refreshResult.success) {
-        // 刷新令牌成功后重试
-        try {
-          const response = await axios.get('http://127.0.0.1:9876/api/materials/')
-          const materials = extractMaterials(response.data)
-          const inventory = {}
-          materials.forEach(material => {
-            if (material.type === 'dyed_fabric') {
-              const color = (material.color || '').trim()
-              const quantity = Number(material.quantity) || 0
-              if (!color || quantity <= 0) return
-              inventory[color] = (inventory[color] || 0) + quantity
-            }
-          })
-          clothInventory.value = inventory
-        } catch (retryError) {
-          console.error('重试获取染色布库存失败:', retryError)
-        }
-      }
-    }
   }
 }
 
@@ -742,48 +717,20 @@ const updateIncomingMaterials = () => {
 // 更新布料库存
 const updateClothInventory = async (clothName, quantity) => {
   try {
-    // 查找对应的染色布材料（materials 接口可能分页）
-    const response = await axios.get('http://127.0.0.1:9876/api/materials/')
+    const response = await api.get('materials/')
     const materials = extractMaterials(response.data)
     const clothMaterial = materials.find(m => m.type === 'dyed_fabric' && m.color === clothName)
-    
+
     if (clothMaterial) {
-      // 用 PATCH 只更新数量，避免传入无关字段导致后端校验失败
-      await axios.patch(`http://127.0.0.1:9876/api/materials/${clothMaterial.id}/`, {
+      await api.patch(`materials/${clothMaterial.id}/`, {
         quantity: Number(quantity) || 0
       })
-      // 重新加载库存
       loadClothInventory()
       ElMessage.success('染色布库存已更新')
     }
   } catch (error) {
     console.error('更新染色布库存失败:', error)
     console.error('错误详情:', error.response?.data)
-    // 处理认证错误
-    if (error.response?.status === 401) {
-      const refreshResult = await authStore.refreshToken()
-      if (refreshResult.success) {
-        // 刷新令牌成功后重试
-        try {
-          const response = await axios.get('http://127.0.0.1:9876/api/materials/')
-          const materials = extractMaterials(response.data)
-          const clothMaterial = materials.find(m => m.type === 'dyed_fabric' && m.color === clothName)
-          
-          if (clothMaterial) {
-            await axios.patch(`http://127.0.0.1:9876/api/materials/${clothMaterial.id}/`, {
-              quantity: Number(quantity) || 0
-            })
-            // 重新加载库存
-            loadClothInventory()
-            ElMessage.success('染色布库存已更新')
-          }
-          return
-        } catch (retryError) {
-          console.error('重试更新染色布库存失败:', retryError)
-          ElMessage.error('更新染色布库存失败')
-        }
-      }
-    }
     ElMessage.error('更新染色布库存失败')
   }
 }
@@ -884,7 +831,7 @@ const syncModelColorsWithInventory = () => {
 // 从材料溯源获取可用染色布
 const fetchAvailableColors = async () => {
   try {
-    const response = await axios.get('http://127.0.0.1:9876/api/materials/')
+    const response = await api.get('materials/')
     const materials = extractMaterials(response.data)
     const cloths = new Set()
     materials.forEach(material => {
@@ -898,35 +845,7 @@ const fetchAvailableColors = async () => {
     syncModelColorsWithInventory()
   } catch (error) {
     console.error('获取染色布选项失败:', error)
-    // 处理认证错误
-    if (error.response?.status === 401) {
-      const refreshResult = await authStore.refreshToken()
-      if (refreshResult.success) {
-        // 刷新令牌成功后重试
-        try {
-          const response = await axios.get('http://127.0.0.1:9876/api/materials/')
-          const materials = extractMaterials(response.data)
-          const cloths = new Set()
-          materials.forEach(material => {
-            const color = (material.color || '').trim()
-            const quantity = Number(material.quantity) || 0
-            if (material.type === 'dyed_fabric' && color && quantity > 0) {
-              cloths.add(color)
-            }
-          })
-          availableColors.value = Array.from(cloths)
-          syncModelColorsWithInventory()
-          return
-        } catch (retryError) {
-          console.error('重试获取染色布选项失败:', retryError)
-          availableColors.value = []
-        }
-      } else {
-        availableColors.value = []
-      }
-    } else {
-      availableColors.value = []
-    }
+    availableColors.value = []
   }
 }
 
@@ -1189,20 +1108,10 @@ const templateTypeNames = {
 // 获取工厂列表
 const fetchFactories = async () => {
   try {
-    const response = await axios.get('http://127.0.0.1:9876/api/factories/')
+    const response = await api.get('factories/')
     factories.value = response.data
   } catch (error) {
     console.error('Error fetching factories:', error)
-    // 处理认证错误
-    if (error.response?.status === 401) {
-      const refreshResult = await authStore.refreshToken()
-      if (refreshResult.success) {
-        // 刷新令牌成功后重试
-        const response = await axios.get('http://127.0.0.1:9876/api/factories/')
-        factories.value = response.data
-        return
-      }
-    }
     ElMessage.error('获取工厂列表失败')
   }
 }
@@ -1388,40 +1297,19 @@ const saveCurrentPlan = async () => {
   }
   
   try {
-    const response = await axios.post('http://127.0.0.1:9876/api/production-plan-details/', planData)
+    const response = await api.post('production-plan-details/', planData)
     productionPlans.value.push(response.data)
     addCustomerToOptions(planData.customer)
-    
-    // 更新布料库存，将余料返回库存
+
     const clothName = models.value[0].color
     const remainingQty = parseFloat(remainingMaterials.value)
     if (clothName && !isNaN(remainingQty)) {
       await updateClothInventory(clothName, remainingQty)
     }
-    
+
     ElMessage.success('计划保存成功')
   } catch (error) {
     console.error('保存计划失败:', error)
-    // 处理认证错误
-    if (error.response?.status === 401) {
-      const refreshResult = await authStore.refreshToken()
-      if (refreshResult.success) {
-        // 刷新令牌成功后重试
-        const response = await axios.post('http://127.0.0.1:9876/api/production-plan-details/', planData)
-        productionPlans.value.push(response.data)
-        addCustomerToOptions(planData.customer)
-        
-        // 更新布料库存，将余料返回库存
-        const clothName = models.value[0].color
-        const remainingQty = parseFloat(remainingMaterials.value)
-        if (clothName && !isNaN(remainingQty)) {
-          await updateClothInventory(clothName, remainingQty)
-        }
-        
-        ElMessage.success('计划保存成功')
-        return
-      }
-    }
     ElMessage.error('保存计划失败：' + (error.response?.data?.detail || error.message))
   }
 }
@@ -1446,7 +1334,7 @@ const deletePlanById = async (id) => {
     type: 'warning'
   }).then(async () => {
     try {
-      await axios.delete(`http://127.0.0.1:9876/api/production-plan-details/${id}/`)
+      await api.delete(`production-plan-details/${id}/`)
       const index = productionPlans.value.findIndex(p => p.id === id)
       if (index > -1) {
         productionPlans.value.splice(index, 1)
@@ -1454,20 +1342,6 @@ const deletePlanById = async (id) => {
       }
     } catch (error) {
       console.error('删除计划失败:', error)
-      // 处理认证错误
-      if (error.response?.status === 401) {
-        const refreshResult = await authStore.refreshToken()
-        if (refreshResult.success) {
-          // 刷新令牌成功后重试
-          await axios.delete(`http://127.0.0.1:9876/api/production-plan-details/${id}/`)
-          const index = productionPlans.value.findIndex(p => p.id === id)
-          if (index > -1) {
-            productionPlans.value.splice(index, 1)
-            ElMessage.success('删除成功')
-          }
-          return
-        }
-      }
       ElMessage.error('删除失败：' + (error.response?.data?.detail || error.message))
     }
   }).catch(() => {})  
@@ -1476,7 +1350,7 @@ const deletePlanById = async (id) => {
 // 从后端加载生产计划列表
 const fetchProductionPlans = async () => {
   try {
-    const response = await axios.get('http://127.0.0.1:9876/api/production-plan-details/')
+    const response = await api.get('production-plan-details/')
     productionPlans.value = response.data
     productionPlans.value.forEach((p) => addCustomerToOptions(p.customer))
     const queryPlanId = Number(route.query.planId)
@@ -1486,22 +1360,6 @@ const fetchProductionPlans = async () => {
     }
   } catch (error) {
     console.error('获取生产计划列表失败:', error)
-    // 处理认证错误
-    if (error.response?.status === 401) {
-      const refreshResult = await authStore.refreshToken()
-      if (refreshResult.success) {
-        // 刷新令牌成功后重试
-        const response = await axios.get('http://127.0.0.1:9876/api/production-plan-details/')
-        productionPlans.value = response.data
-        productionPlans.value.forEach((p) => addCustomerToOptions(p.customer))
-        const queryPlanId = Number(route.query.planId)
-        if (queryPlanId) {
-          const target = productionPlans.value.find((p) => p.id === queryPlanId)
-          if (target) loadPlan(target)
-        }
-        return
-      }
-    }
     ElMessage.error('获取生产计划列表失败')
   }
 }

@@ -155,14 +155,21 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DATA_UPLOAD_MAX_MEMORY_SIZE = 1024 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 
-# CORS Configuration
+# CORS：默认本地前端；VPS 部署请设置环境变量 CORS_ALLOWED_ORIGINS（逗号分隔完整 Origin）
+_default_cors = 'http://localhost:5173,http://127.0.0.1:5173'
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
+    origin.strip()
+    for origin in os.environ.get('CORS_ALLOWED_ORIGINS', _default_cors).split(',')
+    if origin.strip()
 ]
 
 # 允许携带凭证（cookie）
 CORS_ALLOW_CREDENTIALS = True
+
+# HTTPS 域名部署时，浏览器跨站请求需配置（逗号分隔，须含协议，如 https://example.com）
+_csrf = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
+if _csrf:
+    CSRF_TRUSTED_ORIGINS = [x.strip() for x in _csrf.split(',') if x.strip()]
 
 # REST Framework Configuration
 REST_FRAMEWORK = {
