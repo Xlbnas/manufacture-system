@@ -315,6 +315,52 @@ html, body {
   color: var(--text-color);
 }
 
+/* Drawer 与 Dialog 一致：否则默认白底 + 全局暗色表格/输入框会割裂，标题继承浅色会看不清 */
+.dark-mode .el-drawer {
+  background-color: var(--card-bg);
+  color: var(--text-color);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+.dark-mode .el-drawer__header {
+  margin-bottom: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-color);
+}
+
+.dark-mode .el-drawer__title {
+  color: var(--text-color);
+}
+
+.dark-mode .el-drawer__body {
+  background-color: var(--card-bg);
+  color: var(--text-color);
+}
+
+.dark-mode .el-descriptions {
+  --el-fill-color-blank: #30343d;
+  --el-descriptions-item-bordered-label-background: #2b3038;
+  --el-text-color-primary: #e8eaed;
+  --el-text-color-regular: #cfd3dc;
+  --el-border-color-lighter: #4a4f58;
+}
+
+.dark-mode .el-descriptions__body {
+  background-color: #2b3038 !important;
+}
+
+.dark-mode .el-descriptions__table td.el-descriptions__cell {
+  background-color: #30343d !important;
+  color: #e8eaed !important;
+  border-color: #4a4f58 !important;
+}
+
+.dark-mode .el-descriptions__label.is-bordered-label {
+  background-color: #2b3038 !important;
+  color: #cfd3dc !important;
+}
+
 .dark-mode .el-form-item__label {
   color: var(--text-color);
 }
