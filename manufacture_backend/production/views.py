@@ -16,6 +16,7 @@ from django.utils.dateparse import parse_date
 from rest_framework import serializers, status, viewsets
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -30,12 +31,14 @@ from .models import (
     ProductionProgress,
     Supplier,
     TransferOrder,
+    TransferOrderItem,
     Warehouse,
     WarehouseNode,
     WeavingOrder,
     WeavingReceipt,
 )
 from .serializers import (
+    CompleteProductionSerializer,
     DyeingOrderSerializer,
     FactorySerializer,
     MaterialDetailSerializer,
@@ -52,6 +55,7 @@ from .serializers import (
     WarehouseSerializer,
     WeavingOrderSerializer,
 )
+from .template_catalog import sync_template_product_rows
 from .backup_utils import (
     BackupError,
     CONFIRM_RESTORE_TEXT,
@@ -69,7 +73,10 @@ def _to_decimal(value):
 
 
 def _apply_dyeing_receipt(order_id, qty, receipt_date, note=''):
-    """事务内：登记染色到货；本批米数 1:1 扣坯布、累加染色布库存行。"""
+    """事务内：登记染色到货；按本单「约定−已收」控制可收量，累加染色布库存行。
+
+    坯布已在下单一并锁定在染厂侧理解下，不在此重复扣减材料溯源中的坯布行数量；
+    仅更新本单已到货、生成/累加染色布库存。"""
     note = note or ''
     qty = _to_decimal(qty)
     with transaction.atomic():
@@ -86,12 +93,7 @@ def _apply_dyeing_receipt(order_id, qty, receipt_date, note=''):
         if qty > remaining:
             raise ValueError('超过可收货数量')
 
-        raw = Material.objects.select_for_update().get(pk=order.raw_material_id)
-        if _to_decimal(raw.quantity) < qty:
-            raise ValueError('坯布库存不足')
-
-        Material.objects.filter(pk=raw.id).update(quantity=F('quantity') - qty)
-
+        raw = order.raw_material
         if order.dyed_material_id:
             Material.objects.filter(pk=order.dyed_material_id).update(
                 quantity=F('quantity') + qty,
@@ -208,9 +210,126 @@ def _get_stock(warehouse, product, color, size):
     return stock
 
 
+def _plan_detail_finish_color(plan_detail):
+    c = (plan_detail.cloth_color or '').strip()
+    if c:
+        return c[:50]
+    models_json = plan_detail.models_data or []
+    if isinstance(models_json, list) and models_json:
+        first = models_json[0]
+        if isinstance(first, dict):
+            return str(first.get('color') or '').strip()[:50]
+    return ''
+
+
+def _planned_quantities_cell(sizes_row, model_index):
+    if not isinstance(sizes_row, dict):
+        return 0
+    planned = sizes_row.get('quantities') or []
+    if not isinstance(planned, list) or model_index >= len(planned):
+        return 0
+    try:
+        return int(planned[model_index])
+    except (TypeError, ValueError):
+        return int(float(planned[model_index] or 0))
+
+
+def _build_size_completion_aligned(sizes_data, size_completion):
+    """与 sizes_data 按下标对齐；每项含 name、completed_quantities（长度与 quantities 一致）。"""
+    sizes_data = sizes_data if isinstance(sizes_data, list) else []
+    sc_in = size_completion if isinstance(size_completion, list) else []
+    result = []
+    for i, row in enumerate(sizes_data):
+        if not isinstance(row, dict):
+            result.append({'name': '', 'completed_quantities': []})
+            continue
+        name = str(row.get('name') or '')
+        planned = row.get('quantities') or []
+        if not isinstance(planned, list):
+            planned = []
+        n = len(planned)
+        prev = sc_in[i] if i < len(sc_in) and isinstance(sc_in[i], dict) else {}
+        done_raw = prev.get('completed_quantities') if isinstance(prev, dict) else None
+        if not isinstance(done_raw, list):
+            done_raw = []
+        done_ints = []
+        for j in range(n):
+            if j < len(done_raw):
+                try:
+                    done_ints.append(max(0, int(done_raw[j])))
+                except (TypeError, ValueError):
+                    done_ints.append(max(0, int(float(done_raw[j] or 0))))
+            else:
+                done_ints.append(0)
+        result.append({'name': name, 'completed_quantities': done_ints})
+    return result
+
+
+def _size_row_index_by_name(sizes_data):
+    m = {}
+    for i, row in enumerate(sizes_data or []):
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get('name') or '')
+        if name and name not in m:
+            m[name] = i
+    return m
+
+
+def _default_factory_warehouse_name_stem(factory):
+    """与前端建工厂习惯一致：地区 + 车间 → 「武昌八车间」形式，再挂「工厂仓」。"""
+    loc = (factory.location or '').strip()
+    ws = (factory.workshop or '').strip()
+    return f'{loc}{ws}车间'
+
+
+def ensure_factory_warehouse_for_factory(factory):
+    """
+    保证每个工厂有一条启用的、且 factory 外键指向自己的工厂仓节点。
+    新建工厂时在 perform_create 中调用；完工入库缺节点时由 _default_factory_warehouse 懒创建。
+    """
+    if factory is None:
+        return None
+    with transaction.atomic():
+        Factory.objects.select_for_update().filter(pk=factory.pk).first()
+        existing = (
+            WarehouseNode.objects.filter(
+                warehouse_type='factory',
+                factory_id=factory.id,
+                is_active=True,
+            )
+            .order_by('id')
+            .first()
+        )
+        if existing:
+            return existing
+        stem = _default_factory_warehouse_name_stem(factory)
+        name = f'{stem}工厂仓'
+        resolved = name
+        n = 2
+        while WarehouseNode.objects.filter(name=resolved).exists():
+            resolved = f'{name} ({n})'
+            n += 1
+        return WarehouseNode.objects.create(
+            name=resolved,
+            warehouse_type='factory',
+            factory=factory,
+        )
+
+
+def _default_factory_warehouse(factory):
+    if factory is None:
+        return None
+    return ensure_factory_warehouse_for_factory(factory)
+
+
 class FactoryViewSet(viewsets.ModelViewSet):
     queryset = Factory.objects.all()
     serializer_class = FactorySerializer
+
+    def perform_create(self, serializer):
+        factory = serializer.save()
+        ensure_factory_warehouse_for_factory(factory)
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
@@ -244,6 +363,16 @@ class DyeingOrderViewSet(viewsets.ModelViewSet):
         'raw_material', 'supplier', 'output_warehouse', 'dyed_material'
     ).prefetch_related('receipts').order_by('-id')
     serializer_class = DyeingOrderSerializer
+
+    def perform_destroy(self, instance):
+        """无到货记录时可删单，并退回建单时扣减的坯布数量。"""
+        if instance.receipts.exists() or _to_decimal(instance.received_quantity) > 0:
+            raise ValidationError('已有染色到货记录，不能删除该单；如需冲账请在材料溯源中手工调整。')
+        with transaction.atomic():
+            raw_id = instance.raw_material_id
+            if raw_id:
+                Material.objects.filter(pk=raw_id).update(quantity=F('quantity') + instance.quantity)
+            instance.delete()
 
     @action(detail=True, methods=['post'], url_path='receipts')
     def receipts(self, request, pk=None):
@@ -284,12 +413,38 @@ class DyeingOrderViewSet(viewsets.ModelViewSet):
         order.refresh_from_db()
         return Response(DyeingOrderSerializer(order).data)
 
+    @action(detail=True, methods=['post'], url_path='close-with-loss')
+    def close_with_loss(self, request, pk=None):
+        """剩余约定未到货部分记为产出损耗并关单，不再允许登记到货。"""
+
+        note = str(request.data.get('note') or request.data.get('loss_note') or '').strip()
+        with transaction.atomic():
+            order = DyeingOrder.objects.select_for_update().get(pk=pk)
+            if order.status not in ('draft', 'receiving'):
+                return Response({'error': '当前状态不可执行收尾记损耗'}, status=status.HTTP_400_BAD_REQUEST)
+            rem = _to_decimal(order.quantity) - _to_decimal(order.received_quantity)
+            if rem <= 0:
+                return Response({'error': '无剩余约定量可记为损耗'}, status=status.HTTP_400_BAD_REQUEST)
+            order.lost_quantity = rem
+            order.loss_note = note[:500]
+            order.status = 'completed'
+            order.save(update_fields=['lost_quantity', 'loss_note', 'status'])
+        order.refresh_from_db()
+        return Response(DyeingOrderSerializer(order).data, status=status.HTTP_200_OK)
+
 
 class WeavingOrderViewSet(viewsets.ModelViewSet):
     queryset = WeavingOrder.objects.all().select_related(
         'supplier', 'inbound_warehouse', 'raw_material'
     ).prefetch_related('receipts').order_by('-id')
     serializer_class = WeavingOrderSerializer
+
+    def perform_destroy(self, instance):
+        if instance.receipts.exists() or _to_decimal(instance.received_quantity) > 0:
+            raise ValidationError(
+                '已有布厂到货记录，不能删除该单；如需冲账请在材料溯源中手工调整。'
+            )
+        instance.delete()
 
     @action(detail=True, methods=['post'], url_path='receipts')
     def receipts(self, request, pk=None):
@@ -334,6 +489,19 @@ class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
 
+    def perform_destroy(self, instance):
+        if Warehouse.objects.filter(product=instance).exists():
+            raise ValidationError('该产品仍有成品库存行，无法删除。')
+        if TransferOrderItem.objects.filter(product=instance).exists():
+            raise ValidationError('该产品仍被调拨单引用，无法删除。')
+        super().perform_destroy(instance)
+
+    @action(detail=False, methods=['post'], url_path='sync-from-catalog')
+    def sync_from_catalog(self, request):
+        """按 template_catalog 补全缺失的模板线 Product（不覆盖已有名称）。"""
+        created_keys = sync_template_product_rows()
+        return Response({'created_keys': created_keys})
+
 
 class ProductionPlanViewSet(viewsets.ModelViewSet):
     queryset = ProductionPlan.objects.all()
@@ -350,7 +518,7 @@ class ProductionPlanDetailViewSet(viewsets.ModelViewSet):
     serializer_class = ProductionPlanDetailSerializer
 
     def get_queryset(self):
-        queryset = ProductionPlanDetail.objects.all()
+        queryset = ProductionPlanDetail.objects.select_related('factory').all()
         date = self.request.query_params.get('date')
         plan_type = self.request.query_params.get('plan_type')
         if date:
@@ -359,10 +527,134 @@ class ProductionPlanDetailViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(plan_type=plan_type)
         return queryset.order_by('-date', '-created_at')
 
+    @action(detail=True, methods=['post'], url_path='complete-production')
+    def complete_production(self, request, pk=None):
+        ser = CompleteProductionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        wh_candidate = ser.validated_data.get('warehouse_id')
+        lines_in = ser.validated_data['lines']
+        if not lines_in:
+            return Response({'error': '至少需要一行完工数量'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            plan = (
+                ProductionPlanDetail.objects.select_for_update()
+                .select_related('factory')
+                .get(pk=pk)
+            )
+            product = None
+            if plan.template:
+                product = Product.objects.filter(production_template_key=plan.template).first()
+            if product is None:
+                return Response(
+                    {
+                        'error': (
+                            '未找到与该排产模板对应的产品：请在「模板成品」页同步模板行，'
+                            '或执行 python manage.py sync_template_products，确保存在该模板键的 Product。'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            warehouse = wh_candidate or _default_factory_warehouse(plan.factory)
+            if warehouse is None:
+                return Response(
+                    {'error': '未找到目标仓库：请为该排产选择目标工厂或在请求中传入 warehouse_id'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            color = _plan_detail_finish_color(plan)
+            if not color:
+                return Response(
+                    {'error': '未能解析成品颜色（请填写用布颜色或在型号数据中填写颜色）'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            sizes_data = plan.sizes_data if isinstance(plan.sizes_data, list) else []
+            matrix = _build_size_completion_aligned(sizes_data, plan.size_completion)
+            name_to_i = _size_row_index_by_name(sizes_data)
+
+            for line in lines_in:
+                sz = str(line['size_name'] or '').strip()
+                mi = line['model_index']
+                qty = line['qty_this_batch']
+                if sz not in name_to_i:
+                    return Response({'error': f'未知尺码: {sz}'}, status=status.HTTP_400_BAD_REQUEST)
+                ri = name_to_i[sz]
+                comp_row = matrix[ri]['completed_quantities']
+                if mi < 0 or mi >= len(comp_row):
+                    return Response(
+                        {'error': f'尺码 {sz} 不存在型号列 {mi + 1}（与排产尺码表列数不一致）'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                row_plan = sizes_data[ri]
+                planned = _planned_quantities_cell(row_plan, mi)
+                cur_done = comp_row[mi]
+                if cur_done + qty > planned:
+                    return Response(
+                        {
+                            'error': (
+                                f'尺码 {sz} 型号列 {mi + 1} 完工累计将超过计划'
+                                f'（已 {cur_done} + 本批 {qty} > 计划 {planned}）'
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            increments = []
+            for line in lines_in:
+                sz = str(line['size_name'] or '').strip()
+                mi = line['model_index']
+                qty = line['qty_this_batch']
+                ri = name_to_i[sz]
+                increments.append((sz, qty, ri, mi))
+
+            # 分批累加矩阵与库存（合并同 SKU 入库行）
+            wh_key = {}
+
+            def add_wh(size_key, add_q):
+                wh_key.setdefault(size_key, 0)
+                wh_key[size_key] += add_q
+
+            for sz, qty, ri, mi in increments:
+                matrix[ri]['completed_quantities'][mi] += qty
+                add_wh(sz, qty)
+
+            for size_key, add_q in wh_key.items():
+                stock = _get_stock(warehouse, product, color, size_key)
+                locked = Warehouse.objects.select_for_update().get(pk=stock.pk)
+                locked.quantity += add_q
+                locked.save(update_fields=['quantity'])
+
+            plan.size_completion = matrix
+            plan.save(update_fields=['size_completion', 'updated_at'])
+
+        plan.refresh_from_db()
+        return Response(ProductionPlanDetailSerializer(plan).data, status=status.HTTP_200_OK)
+
 
 class WarehouseViewSet(viewsets.ModelViewSet):
     queryset = Warehouse.objects.all().order_by('-id')
     serializer_class = WarehouseSerializer
+
+    def get_queryset(self):
+        qs = Warehouse.objects.select_related('warehouse', 'product').order_by('-id')
+        wid_raw = self.request.query_params.get('warehouse') or self.request.query_params.get('warehouse_id')
+        pid_raw = self.request.query_params.get('product') or self.request.query_params.get('product_id')
+        if wid_raw not in (None, ''):
+            try:
+                qs = qs.filter(warehouse_id=int(wid_raw))
+            except (TypeError, ValueError):
+                pass
+        if pid_raw not in (None, ''):
+            try:
+                qs = qs.filter(product_id=int(pid_raw))
+            except (TypeError, ValueError):
+                pass
+        only_pos = (self.request.query_params.get('only_positive') or '').lower()
+        if only_pos in ('1', 'true', 'yes'):
+            qs = qs.filter(quantity__gt=0)
+        return qs
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())

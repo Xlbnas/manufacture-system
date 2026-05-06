@@ -297,7 +297,7 @@ const createDyeingOrder = async () => {
     await api.post('/dyeing-orders/', dyeForm.value)
     dyeDialogVisible.value = false
     await load()
-    ElMessage.success('染色单已创建为草稿，请到「外协订单」登记到货或整单收齐')
+    ElMessage.success('染色单已创建（已按约定产量扣减坯布库存），请到「外协订单」登记到货或整单收齐')
   } catch (e) {
     const msg = e?.response?.data ? JSON.stringify(e.response.data) : e?.message
     ElMessage.error(msg || '创建失败')

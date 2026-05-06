@@ -95,6 +95,7 @@ import api from '../utils/axios'
 import * as ExcelJS from 'exceljs'
 import { ElMessage } from 'element-plus'
 import { Check, Close } from '@element-plus/icons-vue'
+import { templateLabelForKey, isKnownTemplateKey } from '../constants/productionTemplates.js'
 
 export default {
   data() {
@@ -134,6 +135,16 @@ export default {
       if (d && Array.isArray(d.results)) return d.results
       return []
     },
+    /** 与生产页模板用语一致：已知模板键用中文名，否则用产品显示名 */
+    displayProductLabel(product) {
+      if (!product) return '产品'
+      if (typeof product === 'object') {
+        const k = product.production_template_key
+        if (k && isKnownTemplateKey(k)) return templateLabelForKey(k)
+        return product.name || `产品#${product.id}`
+      }
+      return `产品#${product}`
+    },
     /** 从后端拉取看板三张图所需数据 */
     async loadDashboardFromApi() {
       try {
@@ -150,7 +161,7 @@ export default {
 
         const productNameById = {}
         for (const p of products) {
-          productNameById[p.id] = p.name || `产品#${p.id}`
+          productNameById[p.id] = this.displayProductLabel(p)
         }
 
         const actualByPlanId = {}
@@ -199,7 +210,7 @@ export default {
     aggregateByProductName(stocks) {
       const map = {}
       for (const row of stocks || []) {
-        const pname = row.product?.name || `产品#${row.product}`
+        const pname = this.displayProductLabel(row.product)
         const q = Number(row.quantity) || 0
         map[pname] = (map[pname] || 0) + q
       }
@@ -580,7 +591,7 @@ export default {
           }
           case 'color': {
             const st = this.stocksFilteredByWarehouse(this.currentFactory).filter(
-              (r) => (r.product?.name || `产品#${r.product}`) === this.currentProduct
+              (r) => this.displayProductLabel(r.product) === this.currentProduct
             )
             chartData = this.aggregateByColor(st)
             seriesName = '颜色库存'
@@ -588,7 +599,7 @@ export default {
           }
           case 'size': {
             const st = this.stocksFilteredByWarehouse(this.currentFactory)
-              .filter((r) => (r.product?.name || `产品#${r.product}`) === this.currentProduct)
+              .filter((r) => this.displayProductLabel(r.product) === this.currentProduct)
               .filter((r) => (r.color || '—') === this.currentColor)
             chartData = this.aggregateBySize(st)
             seriesName = '尺码库存'
@@ -722,12 +733,14 @@ export default {
         // 添加产品数据
         const productWorksheet = workbook.addWorksheet('产品数据')
         productWorksheet.columns = [
+          { header: '排产模板键', key: 'production_template_key', width: 14 },
           { header: '产品名称', key: 'name', width: 20 },
           { header: '颜色选项', key: 'colors', width: 30 },
           { header: '规格参数', key: 'specifications', width: 30 }
         ]
         products.forEach(item => {
           productWorksheet.addRow({
+            production_template_key: item.production_template_key || '',
             name: item.name,
             colors: item.colors || '',
             specifications: item.specifications || ''
@@ -747,7 +760,7 @@ export default {
         ]
         warehouse.forEach(item => {
           warehouseWorksheet.addRow({
-            product: item.product?.name || item.product,
+            product: this.displayProductLabel(item.product),
             color: item.color,
             size: item.size,
             quantity: item.quantity,

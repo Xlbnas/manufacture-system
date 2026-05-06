@@ -56,6 +56,10 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/templates',
+    redirect: '/product'
+  },
+  {
     path: '/material',
     name: 'Material',
     component: () => import('../components/material.vue'),

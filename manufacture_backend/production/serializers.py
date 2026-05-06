@@ -1,3 +1,6 @@
+from decimal import Decimal
+
+from django.db.models import F
 from rest_framework import serializers
 
 from .models import (
@@ -17,6 +20,7 @@ from .models import (
     WeavingOrder,
     WeavingReceipt,
 )
+from .template_catalog import TEMPLATE_LABELS
 
 
 class FactorySerializer(serializers.ModelSerializer):
@@ -74,6 +78,26 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = '__all__'
 
+    def validate_production_template_key(self, value):
+        key = (value or '').strip()
+        if not key:
+            raise serializers.ValidationError('排产模板键不能为空')
+        return key
+
+    def validate(self, attrs):
+        if self.instance is None:
+            key = (attrs.get('production_template_key') or '').strip()
+            if key not in TEMPLATE_LABELS:
+                raise serializers.ValidationError(
+                    {'production_template_key': '仅允许使用系统定义的模板键（与生产页模板一致）'}
+                )
+            return attrs
+        if 'production_template_key' in attrs:
+            new_k = (attrs['production_template_key'] or '').strip()
+            if new_k != self.instance.production_template_key:
+                raise serializers.ValidationError({'production_template_key': '不允许修改模板键'})
+        return attrs
+
 
 class ProductionPlanSerializer(serializers.ModelSerializer):
     class Meta:
@@ -120,9 +144,44 @@ class ProductionPlanDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'date', 'plan_type', 'name', 'customer',
             'cloth_color', 'cloth_used', 'cloth_remaining',
-            'factory', 'factory_id', 'template', 'models_data', 'sizes_data',
+            'factory', 'factory_id',
+            'template', 'models_data', 'sizes_data', 'size_completion',
+            'accessories_delivered', 'accessories_delivered_at',
             'created_at', 'updated_at'
         ]
+
+    def create(self, validated_data):
+        from django.utils import timezone
+
+        if validated_data.get('accessories_delivered') and not validated_data.get('accessories_delivered_at'):
+            validated_data['accessories_delivered_at'] = timezone.now()
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        from django.utils import timezone
+
+        acc = validated_data.get('accessories_delivered')
+        if acc is True and not instance.accessories_delivered:
+            validated_data.setdefault('accessories_delivered_at', timezone.now())
+        elif acc is False:
+            validated_data['accessories_delivered_at'] = None
+        return super().update(instance, validated_data)
+
+
+class CompleteProductionLineSerializer(serializers.Serializer):
+    size_name = serializers.CharField(max_length=50)
+    model_index = serializers.IntegerField(min_value=0)
+    qty_this_batch = serializers.IntegerField(min_value=1)
+
+
+class CompleteProductionSerializer(serializers.Serializer):
+    lines = CompleteProductionLineSerializer(many=True)
+    warehouse_id = serializers.PrimaryKeyRelatedField(
+        queryset=WarehouseNode.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
 
 
 class DyeingReceiptSerializer(serializers.ModelSerializer):
@@ -176,12 +235,32 @@ class DyeingOrderSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'raw_material', 'raw_material_id', 'supplier', 'supplier_id', 'output_name', 'output_color',
             'quantity', 'received_quantity', 'remaining_quantity', 'receipts',
-            'output_warehouse', 'output_warehouse_id', 'status', 'dyed_material', 'created_at',
+            'output_warehouse', 'output_warehouse_id', 'status', 'dyed_material',
+            'lost_quantity', 'loss_note', 'created_at',
         ]
-        read_only_fields = ['status', 'received_quantity', 'dyed_material', 'created_at']
+        read_only_fields = ['status', 'received_quantity', 'dyed_material', 'lost_quantity', 'created_at']
 
     def get_remaining_quantity(self, obj):
         return obj.quantity - obj.received_quantity
+
+    def create(self, validated_data):
+        """建染色单时按约定产量扣减所选坯布库存（坯布已寄染厂）；到货登记不再扣坯布。"""
+        from django.db import transaction
+
+        qty = validated_data['quantity']
+        raw = validated_data['raw_material']
+        if qty <= 0:
+            raise serializers.ValidationError({'quantity': '约定产量须大于 0'})
+        with transaction.atomic():
+            rm = Material.objects.select_for_update().get(pk=raw.pk)
+            if rm.type != 'raw_fabric':
+                raise serializers.ValidationError({'raw_material_id': '只能选择坯布类型的库存行'})
+            if Decimal(str(rm.quantity)) < Decimal(str(qty)):
+                raise serializers.ValidationError(
+                    {'quantity': f'坯布库存不足（当前 {rm.quantity}，本单需 {qty}）。'}
+                )
+            Material.objects.filter(pk=rm.pk).update(quantity=F('quantity') - qty)
+            return DyeingOrder.objects.create(**validated_data)
 
 
 class WeavingOrderSerializer(serializers.ModelSerializer):
@@ -237,3 +316,14 @@ class TransferOrderSerializer(serializers.ModelSerializer):
             'status', 'note', 'created_at', 'completed_at', 'items'
         ]
         read_only_fields = ['status', 'created_at', 'completed_at']
+
+    def validate(self, attrs):
+        fw = attrs.get('from_warehouse')
+        tw = attrs.get('to_warehouse')
+        if fw is not None and fw.warehouse_type != 'factory':
+            raise serializers.ValidationError({'from_warehouse_id': '来源仓须为工厂仓（成品从工厂仓调出）。'})
+        if tw is not None and tw.warehouse_type != 'local':
+            raise serializers.ValidationError({'to_warehouse_id': '目标仓须为本地仓。'})
+        if fw is not None and tw is not None and fw.pk == tw.pk:
+            raise serializers.ValidationError('来源仓与目标仓不能相同。')
+        return attrs

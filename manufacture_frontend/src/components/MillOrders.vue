@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../utils/axios'
 
 const router = useRouter()
@@ -120,6 +120,33 @@ const completeAll = async (row, type) => {
   }
 }
 
+const closeDyeingWithLoss = async (row) => {
+  const rem = remaining(row)
+  if (rem <= 0) return
+  try {
+    const { value: note } = await ElMessageBox.prompt(
+      `当前剩余约定量约 ${rem.toFixed(2)} 米将记为产出损耗并关单，且不可再登记到货。`,
+      '收尾记损耗',
+      {
+        confirmButtonText: '确认关单',
+        cancelButtonText: '取消',
+        inputPlaceholder: '损耗说明（可选）',
+        inputValue: '',
+      }
+    )
+    await api.post(`/dyeing-orders/${row.id}/close-with-loss/`, { note: note || '' })
+    ElMessage.success('已记损耗并关单')
+    await loadAll()
+    if (detailVisible.value && detailOrder.value?.id === row.id) {
+      detailVisible.value = false
+    }
+  } catch (e) {
+    if (e === 'cancel') return
+    const msg = e?.response?.data?.error || e?.message || JSON.stringify(e?.response?.data || {})
+    ElMessage.error(msg || '操作失败')
+  }
+}
+
 const openWeaveDialog = () => {
   weaveForm.value = {
     supplier_id: null,
@@ -188,7 +215,8 @@ onMounted(loadAll)
       </template>
 
       <el-alert type="info" show-icon :closable="false" class="hint">
-        登记到货后写入「材料溯源」中的坯布 / 染色布库存；染色按每批米数 1:1 扣减所选坯布行。
+        流程：布厂单收货入坯布 → 下染色单时按约定产量扣减坯布库存（寄染）→ 登记染色到货只增加染色布库存并推进本单已收，不再扣坯布。
+        无到货记录前可删染色单/未收货的布厂单；删染色单会退回建单时扣除的坯布数量。若实际交货率低于 100%，可用「收尾记损耗」将剩余约定量关单（不再补坯布）。
       </el-alert>
 
       <el-tabs v-model="activeTab" class="tabs">
@@ -219,6 +247,15 @@ onMounted(loadAll)
                   @click="completeAll(row, 'dyeing')"
                 >
                   整单收齐
+                </el-button>
+                <el-button
+                  v-if="canReceive(row) && remaining(row) > 0"
+                  type="warning"
+                  link
+                  size="small"
+                  @click="closeDyeingWithLoss(row)"
+                >
+                  收尾记损耗
                 </el-button>
               </template>
             </el-table-column>
@@ -264,8 +301,8 @@ onMounted(loadAll)
       <template v-if="detailOrder">
         <el-descriptions :column="1" border size="small" class="desc">
           <el-descriptions-item label="编号">{{ detailOrder.id }}</el-descriptions-item>
-          <el-descriptions-item v-if="detailType === 'dyeing'" label="坯布">
-            {{ detailOrder.raw_material?.name }}（余量 {{ detailOrder.raw_material?.quantity }}）
+          <el-descriptions-item v-if="detailType === 'dyeing'" label="坯布来源">
+            {{ detailOrder.raw_material?.name }}（仓库余量 {{ detailOrder.raw_material?.quantity }}；建单时已按约定产量扣减）
           </el-descriptions-item>
           <el-descriptions-item v-if="detailType === 'dyeing'" label="染色布">
             {{ detailOrder.output_name }} / {{ detailOrder.output_color }}
@@ -275,6 +312,10 @@ onMounted(loadAll)
           </el-descriptions-item>
           <el-descriptions-item label="约定 / 已收 / 剩余">
             {{ detailOrder.quantity }} / {{ detailOrder.received_quantity }} / {{ remaining(detailOrder).toFixed(2) }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="detailType === 'dyeing' && Number(detailOrder.lost_quantity) > 0" label="产出损耗">
+            {{ detailOrder.lost_quantity }}
+            {{ detailOrder.loss_note ? `（${detailOrder.loss_note}）` : '' }}
           </el-descriptions-item>
           <el-descriptions-item label="状态">{{ statusLabel(detailOrder.status) }}</el-descriptions-item>
         </el-descriptions>
@@ -306,6 +347,14 @@ onMounted(loadAll)
             <el-form-item>
               <el-button type="primary" @click="submitReceipt">提交到货</el-button>
               <el-button @click="goMaterial">打开材料溯源</el-button>
+              <el-button
+                v-if="detailType === 'dyeing' && remaining(detailOrder) > 0"
+                type="warning"
+                plain
+                @click="closeDyeingWithLoss(detailOrder)"
+              >
+                收尾记损耗关单
+              </el-button>
             </el-form-item>
           </el-form>
         </template>

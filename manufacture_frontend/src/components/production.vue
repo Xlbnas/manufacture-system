@@ -26,14 +26,18 @@
       <div class="template-options">
         <div class="template-left">
           <h4>模板切换</h4>
-          <el-radio-group v-model="currentTemplate" @change="changeTemplate">
-            <el-radio-button value="f116">F116</el-radio-button>
-            <el-radio-button value="erDai">二代</el-radio-button>
-            <el-radio-button value="728">728</el-radio-button>
-            <el-radio-button value="danKu">单裤</el-radio-button>
-            <el-radio-button value="g2WaKu">G2蛙裤</el-radio-button>
-            <el-radio-button value="BDU">BDU</el-radio-button>
-            <el-radio-button value="IX7danKu">IX7单裤</el-radio-button>
+          <el-radio-group
+            v-model="currentTemplate"
+            class="template-switch-radios"
+            @change="onTemplateChoiceChange"
+          >
+            <el-radio-button
+              v-for="k in TEMPLATE_KEYS"
+              :key="k"
+              :value="k"
+            >
+              {{ templateTypeNames[k] }}
+            </el-radio-button>
           </el-radio-group>
         </div>
         <div class="template-center">
@@ -70,6 +74,10 @@
               />
             </el-select>
             <el-button size="small" @click="openCustomerManager">客户管理</el-button>
+          </div>
+          <div class="accessories-row">
+            <span class="acc-label">辅料已到齐</span>
+            <el-switch v-model="saveFormAccessoriesDelivered" />
           </div>
         </div>
         <div class="template-right">
@@ -108,19 +116,13 @@
             <th v-for="(model, index) in models" :key="index" colspan="2">
               <div class="model-header" @click.stop>
                 <span class="model-name">{{ model.name }}</span>
-                <el-select
-                  v-model="model.color"
-                  placeholder="选择颜色"
-                  style="width: 120px; margin-left: 10px;"
-                  @change="updateIncomingMaterials"
+                <div
+                  class="fabric-picker-trigger fabric-select-wide"
+                  @click.stop="openDyedFabricDrawer(index, model)"
                 >
-                  <el-option
-                    v-for="color in availableColors"
-                    :key="color"
-                    :label="color"
-                    :value="color"
-                  />
-                </el-select>
+                  <span class="fabric-picker-text">{{ formatFabricPickLabel(model) }}</span>
+                  <el-icon class="fabric-picker-caret"><ArrowDown /></el-icon>
+                </div>
               </div>
             </th>
           </tr>
@@ -236,6 +238,7 @@
                     <div class="plan-title">{{ plan.name }}</div>
                     <div class="plan-actions" @click.stop>
                       <el-button type="primary" size="small" @click="loadPlan(plan)">加载</el-button>
+                      <el-button type="success" size="small" @click="openCompleteProductionDialog(plan)">完工入库</el-button>
                       <el-button type="danger" size="small" @click="deletePlanById(plan.id)">删除</el-button>
                     </div>
                   </div>
@@ -243,6 +246,15 @@
                     <span class="plan-models">型号: {{ (plan.models_data || plan.models || []).length }} 个</span>
                     <span class="plan-total">总计: {{ calculatePlanTotalQuantity(plan) }} 套</span>
                     <span class="plan-customer">客户: {{ plan.customer || '未设置' }}</span>
+                    <span class="plan-acc">
+                      辅料
+                      <el-switch
+                        :model-value="!!plan.accessories_delivered"
+                        size="small"
+                        style="margin-left: 4px"
+                        @change="(v) => patchPlanAccessories(plan, v)"
+                      />
+                    </span>
                   </div>
                 </div>
               </el-tooltip>
@@ -255,6 +267,95 @@
       <el-empty v-if="displayedPlans.length === 0" description="暂无生产计划" />
     </div>
   </div>
+
+  <el-dialog
+    v-model="completeProductionVisible"
+    title="完工入库"
+    width="640px"
+    destroy-on-close
+    @closed="onCompleteProductionDialogClosed"
+  >
+    <div v-if="completePlanForCompletion">
+      <p class="complete-hint">
+        {{ completePlanForCompletion.name }} · {{ completePlanForCompletion.date }} ·
+        成品按当前排产的模板键入账；入库仓与<strong>本排产已选目标工厂</strong>一致，由系统自动解析，无需再选。
+      </p>
+      <div class="inbound-warehouse-banner">
+        <div v-if="completeInboundUi.status === 'ok'" class="inbound-ok">
+          <span class="lbl">入库仓库</span>
+          <strong>{{ completeInboundUi.warehouseName }}</strong>
+          <span class="sub">（按目标工厂自动解析，无需再选）</span>
+        </div>
+        <el-alert v-else-if="completeInboundUi.status === 'no_factory'" type="warning" :closable="false" show-icon>
+          {{ completeInboundUi.message }}
+        </el-alert>
+        <el-alert v-else-if="completeInboundUi.status === 'no_warehouse'" type="warning" :closable="false" show-icon>
+          {{ completeInboundUi.message }}
+        </el-alert>
+      </div>
+      <el-table :data="completeProductionRows" size="small" max-height="380" border>
+        <el-table-column prop="size_name" label="尺码" width="72" />
+        <el-table-column prop="modelLabel" label="型号列" width="96" />
+        <el-table-column label="计划" width="72">
+          <template #default="{ row }">{{ row.planned }}</template>
+        </el-table-column>
+        <el-table-column label="已累计完工" width="96">
+          <template #default="{ row }">{{ row.done_accum }}</template>
+        </el-table-column>
+        <el-table-column label="本批入库" min-width="120">
+          <template #default="{ row }">
+            <el-input v-model.number="row.qty_this_batch" type="number" min="0" placeholder="0" />
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+    <template #footer>
+      <el-button @click="completeProductionVisible = false">取消</el-button>
+      <el-button
+        type="primary"
+        :disabled="!completePlanForCompletion || completeInboundUi.status !== 'ok'"
+        @click="submitCompleteProduction"
+      >
+        确认入库
+      </el-button>
+    </template>
+  </el-dialog>
+
+  <el-drawer
+    v-model="dyedFabricDrawerVisible"
+    title="选择染色布"
+    direction="rtl"
+    size="440px"
+    destroy-on-close
+    @closed="dyedFabricDrawerTargetModel = null"
+  >
+    <el-input
+      v-model="dyedFabricDrawerFilter"
+      clearable
+      placeholder="筛选：颜色 · 名称 · 备注 · 库存"
+      size="small"
+      class="fabric-drawer-filter"
+    />
+    <div v-if="dyedFabricOptions.length === 0" class="fabric-drawer-empty">暂无染色布库存，请到「材料溯源」维护。</div>
+    <ul v-else class="fabric-drawer-list">
+      <li
+        v-for="opt in filteredDyedFabricOptions"
+        :key="opt.id"
+        class="fabric-drawer-item"
+        :class="{
+          active: dyedFabricDrawerTargetModel?.dyed_material_id === opt.id,
+        }"
+        @click="pickDyedFabricFromDrawer(opt)"
+      >
+        <div class="fabric-drawer-item-main">{{ opt.label }}</div>
+      </li>
+    </ul>
+    <p v-if="filteredDyedFabricOptions.length === 0 && dyedFabricOptions.length" class="fabric-drawer-empty">无匹配项，尝试清空筛选</p>
+    <template #footer>
+      <el-button text type="danger" @click="clearDyedFabricInDrawer">清空本列选布</el-button>
+      <el-button type="primary" @click="dyedFabricDrawerVisible = false">完成</el-button>
+    </template>
+  </el-drawer>
 
   <!-- 模板管理模态窗口 -->
   <el-dialog
@@ -438,13 +539,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Download, Plus, Delete, Edit, Setting, Upload } from '@element-plus/icons-vue'
+import { Refresh, Download, Plus, Delete, Edit, Setting, Upload, ArrowDown } from '@element-plus/icons-vue'
 import * as ExcelJS from 'exceljs'
 import api from '../utils/axios'
 import { useRoute } from 'vue-router'
 import ImportComponent from './ImportComponent.vue'
+import { TEMPLATE_TYPE_LABELS as templateTypeNames, TEMPLATE_KEYS } from '../constants/productionTemplates.js'
 
 const route = useRoute()
 
@@ -524,12 +626,96 @@ const templatesData = {
 
 // 响应式数据
 const currentTemplate = ref('f116')
-const models = ref([{ name: 'F116', color: '' }])
+const models = ref([{ name: 'F116', color: '', dyed_material_id: null }])
 const sizes = ref([])
+/** 与模板 radio 无关：整页只有一份 models/sizes；radio 只决定保存计划时的 template 字段 */
+const PRODUCTION_FORM_STORAGE_KEY = 'manufacture_production_form_draft_v2'
+const LEGACY_TEMPLATE_DRAFTS_KEY = 'manufacture_production_template_drafts_v1'
+
+const persistProductionFormToStorage = () => {
+  try {
+    sessionStorage.setItem(
+      PRODUCTION_FORM_STORAGE_KEY,
+      JSON.stringify({
+        v: 2,
+        currentTemplate: currentTemplate.value,
+        models: models.value,
+        sizes: sizes.value,
+      })
+    )
+  } catch (e) {
+    console.warn('persist production form', e)
+  }
+}
+
+const tryMigrateLegacyV1Drafts = () => {
+  try {
+    const raw = sessionStorage.getItem(LEGACY_TEMPLATE_DRAFTS_KEY)
+    if (!raw) return false
+    const data = JSON.parse(raw)
+    const ct = data?.currentTemplate
+    const d = ct && data.drafts ? data.drafts[ct] : null
+    if (!d || !Array.isArray(d.models) || !Array.isArray(d.sizes)) return false
+    models.value = JSON.parse(JSON.stringify(d.models))
+    models.value.forEach((m) => {
+      if (m.dyed_material_id === undefined) m.dyed_material_id = null
+    })
+    sizes.value = JSON.parse(JSON.stringify(d.sizes))
+    normalizeSizesToModelColumns()
+    if (TEMPLATE_KEYS.includes(ct)) currentTemplate.value = ct
+    sessionStorage.removeItem(LEGACY_TEMPLATE_DRAFTS_KEY)
+    persistProductionFormToStorage()
+    return true
+  } catch {
+    return false
+  }
+}
+
+const loadProductionFormFromStorage = () => {
+  try {
+    const raw = sessionStorage.getItem(PRODUCTION_FORM_STORAGE_KEY)
+    if (!raw) return tryMigrateLegacyV1Drafts()
+    const data = JSON.parse(raw)
+    if (!data || data.v !== 2) return tryMigrateLegacyV1Drafts()
+    if (Array.isArray(data.models) && Array.isArray(data.sizes)) {
+      models.value = JSON.parse(JSON.stringify(data.models))
+      models.value.forEach((m) => {
+        if (m.dyed_material_id === undefined) m.dyed_material_id = null
+      })
+      sizes.value = JSON.parse(JSON.stringify(data.sizes))
+      normalizeSizesToModelColumns()
+    }
+    if (data.currentTemplate && TEMPLATE_KEYS.includes(data.currentTemplate)) {
+      currentTemplate.value = data.currentTemplate
+    }
+    return true
+  } catch {
+    return tryMigrateLegacyV1Drafts()
+  }
+}
+
+const clearProductionFormStorage = () => {
+  try {
+    sessionStorage.removeItem(PRODUCTION_FORM_STORAGE_KEY)
+    sessionStorage.removeItem(LEGACY_TEMPLATE_DRAFTS_KEY)
+  } catch (_) {}
+}
+
+let persistDraftTimer = null
+const schedulePersistProductionForm = () => {
+  if (persistDraftTimer) clearTimeout(persistDraftTimer)
+  persistDraftTimer = setTimeout(() => {
+    persistDraftTimer = null
+    persistProductionFormToStorage()
+  }, 400)
+}
+
+watch([models, sizes, currentTemplate], () => schedulePersistProductionForm(), { deep: true })
 const zoomLevel = ref(100)
 const factories = ref([])
 const selectedFactory = ref(null)
-const availableColors = ref([])
+/** 可选染色布库存行：下拉展示「颜色，名称，备注，数量+单位」 */
+const dyedFabricOptions = ref([])
 const selectedMaterialTemplate = ref('')
 
 // 模板管理相关状态
@@ -663,43 +849,122 @@ const updateMaterialData = (row) => {
   }
 }
 
-// 布料库存数据
-const clothInventory = ref({})
-
 const extractMaterials = (payload) => {
   if (Array.isArray(payload)) return payload
   if (Array.isArray(payload?.results)) return payload.results
   return []
 }
 
-// 加载染色布库存（仅统计染色布可用库存）
-const loadClothInventory = async () => {
-  try {
-    const response = await api.get('materials/')
-    const materials = extractMaterials(response.data)
-    const inventory = {}
-    materials.forEach(material => {
-      if (material.type === 'dyed_fabric') {
-        const color = (material.color || '').trim()
-        const quantity = Number(material.quantity) || 0
-        if (!color || quantity <= 0) return
-        inventory[color] = (inventory[color] || 0) + quantity
-      }
-    })
-    clothInventory.value = inventory
-  } catch (error) {
-    console.error('获取染色布库存失败:', error)
+const formatDyedFabricOptionLabel = (material) => {
+  const color = (material.color || '').trim() || '—'
+  const name = (material.name || '').trim() || '—'
+  const unit = material.unit || '米'
+  const qtyNum = Number(material.quantity)
+  const qty = Number.isFinite(qtyNum) ? qtyNum.toFixed(2) : '0.00'
+  const remark = (material.remark || '').trim()
+  const tail = `${qty}${unit}`
+  return remark ? `${color}，${name}，${remark}，${tail}` : `${color}，${name}，${tail}`
+}
+
+const normalizeModelsFabricIds = () => {
+  for (const m of models.value) {
+    if (
+      m.dyed_material_id != null &&
+      m.dyed_material_id !== '' &&
+      !dyedFabricOptions.value.some((o) => o.id === m.dyed_material_id)
+    ) {
+      m.dyed_material_id = null
+    }
+    if (!m.dyed_material_id && (m.color || '').trim()) {
+      const matches = dyedFabricOptions.value.filter((o) => (o.color || '').trim() === (m.color || '').trim())
+      if (matches.length === 1) m.dyed_material_id = matches[0].id
+    }
+    if (m.dyed_material_id) {
+      const opt = dyedFabricOptions.value.find((o) => o.id === m.dyed_material_id)
+      if (opt) m.color = opt.color
+    }
   }
 }
 
-// 来料数量（根据所选布料的库存）
-const incomingMaterials = computed(() => {
-  if (models.value.length === 0 || !models.value[0].color) {
-    return '0.00'
+const syncModelsWithFabricStock = () => {
+  if (!dyedFabricOptions.value.length) return
+  let adjusted = false
+  for (const m of models.value) {
+    if (m.dyed_material_id && !dyedFabricOptions.value.some((o) => o.id === m.dyed_material_id)) {
+      m.dyed_material_id = null
+      adjusted = true
+    }
+    if (m.dyed_material_id) continue
+    const c = (m.color || '').trim()
+    if (!c) continue
+    const byColor = dyedFabricOptions.value.filter((o) => (o.color || '').trim() === c)
+    if (!byColor.length) {
+      m.color = ''
+      adjusted = true
+    } else if (byColor.length === 1) {
+      m.dyed_material_id = byColor[0].id
+      m.color = byColor[0].color
+      adjusted = true
+    }
   }
-  const clothColor = models.value[0].color
-  const inventory = parseFloat(clothInventory.value[clothColor] || 0)
-  return inventory.toFixed(2)
+  if (adjusted) {
+    ElMessage.warning('已按当前染色布库存校正所选布料')
+  }
+}
+
+const refreshDyedFabricOptions = async () => {
+  try {
+    const response = await api.get('materials/')
+    const materials = extractMaterials(response.data)
+    const opts = []
+    materials.forEach((material) => {
+      if (material.type !== 'dyed_fabric') return
+      const quantity = Number(material.quantity) || 0
+      if (quantity <= 0) return
+      opts.push({
+        id: material.id,
+        color: (material.color || '').trim(),
+        name: material.name || '',
+        quantity,
+        unit: material.unit || '米',
+        remark: (material.remark || '').trim(),
+        label: formatDyedFabricOptionLabel(material),
+      })
+    })
+    opts.sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+    dyedFabricOptions.value = opts
+    normalizeModelsFabricIds()
+    syncModelsWithFabricStock()
+  } catch (error) {
+    console.error('获取染色布库存失败:', error)
+    dyedFabricOptions.value = []
+  }
+}
+
+const onDyedFabricChange = (model) => {
+  const opt = dyedFabricOptions.value.find((o) => o.id === model.dyed_material_id)
+  if (opt) {
+    model.color = opt.color
+  } else {
+    model.color = ''
+  }
+}
+
+// 来料数量：优先按所选库存行 id；旧数据仅颜色时按同色汇总
+const incomingMaterials = computed(() => {
+  if (!models.value.length) return '0.00'
+  const m = models.value[0]
+  if (m.dyed_material_id) {
+    const opt = dyedFabricOptions.value.find((o) => o.id === m.dyed_material_id)
+    if (opt) return Number(opt.quantity).toFixed(2)
+  }
+  const clothColor = (m.color || '').trim()
+  if (!clothColor) return '0.00'
+  let sum = 0
+  dyedFabricOptions.value.forEach((o) => {
+    if ((o.color || '').trim() === clothColor) sum += Number(o.quantity) || 0
+  })
+  return sum.toFixed(2)
 })
 
 // 余料数量
@@ -711,21 +976,27 @@ const remainingMaterials = computed(() => {
 
 // 更新来料数量
 const updateIncomingMaterials = () => {
-  loadClothInventory()
+  void refreshDyedFabricOptions()
 }
 
-// 更新布料库存
-const updateClothInventory = async (clothName, quantity) => {
+// 更新布料库存（优先按物料 id，兼容旧数据仅颜色）
+const updateClothInventory = async (materialId, colorFallback, quantity) => {
   try {
     const response = await api.get('materials/')
     const materials = extractMaterials(response.data)
-    const clothMaterial = materials.find(m => m.type === 'dyed_fabric' && m.color === clothName)
+    let clothMaterial
+    if (materialId != null && materialId !== '') {
+      clothMaterial = materials.find((m) => m.id === materialId)
+    }
+    if (!clothMaterial && colorFallback) {
+      clothMaterial = materials.find((m) => m.type === 'dyed_fabric' && m.color === colorFallback)
+    }
 
     if (clothMaterial) {
       await api.patch(`materials/${clothMaterial.id}/`, {
-        quantity: Number(quantity) || 0
+        quantity: Number(quantity) || 0,
       })
-      loadClothInventory()
+      await refreshDyedFabricOptions()
       ElMessage.success('染色布库存已更新')
     }
   } catch (error) {
@@ -783,76 +1054,82 @@ const calculateTotalQuantityForModel = (modelIndex) => {
   return total
 }
 
-
-
-const changeTemplate = () => {
-  const templateData = templatesData[currentTemplate.value]
-  if (templateData) {
-    // 将对象格式转换为数组格式
-    const newSizes = []
-    for (const [name, materialPerSet] of Object.entries(templateData)) {
-      newSizes.push({
-        name: name,
-        materialPerSet: materialPerSet,
-        quantities: models.value.map(() => 0)
-      })
-    }
-    sizes.value = newSizes
-    
-    // 更新型号名称为模板名称
-    const templateName = templateTypeNames[currentTemplate.value] || currentTemplate.value
-    if (models.value.length > 0) {
-      models.value[0].name = templateName
-    } else {
-      models.value.push({ name: templateName, color: '' })
-    }
-    
-    // 从材料溯源获取颜色选项
-    fetchAvailableColors()
+const normalizeSizesToModelColumns = () => {
+  const colCount = Math.max(1, models.value.length)
+  for (const row of sizes.value) {
+    if (!row.quantities) row.quantities = []
+    while (row.quantities.length < colCount) row.quantities.push(0)
+    if (row.quantities.length > colCount) row.quantities.length = colCount
   }
 }
 
-const syncModelColorsWithInventory = () => {
-  const valid = new Set(availableColors.value)
-  if (!valid.size) return
-  let adjusted = false
-  models.value.forEach((m) => {
-    const color = (m.color || '').trim()
-    if (color && !valid.has(color)) {
-      m.color = availableColors.value[0]
-      adjusted = true
-    }
-  })
-  if (adjusted) {
-    ElMessage.warning('已按当前染色布库存校正计划颜色')
+/**
+ * 切换模板 radio 时：保留各尺码数量、染色布等已填数据；
+ * 仅把表头首型号名称、各尺码「耗料/套」对齐到当前 templatesData（与系统原模板耗料表一致）。
+ */
+const syncFormWithTemplateSelection = (templateKey) => {
+  const td = templatesData[templateKey]
+  if (!td) return
+  const label = templateTypeNames[templateKey] || templateKey
+  if (models.value.length > 0) {
+    models.value[0].name = label
   }
-}
-
-// 从材料溯源获取可用染色布
-const fetchAvailableColors = async () => {
-  try {
-    const response = await api.get('materials/')
-    const materials = extractMaterials(response.data)
-    const cloths = new Set()
-    materials.forEach(material => {
-      const color = (material.color || '').trim()
-      const quantity = Number(material.quantity) || 0
-      if (material.type === 'dyed_fabric' && color && quantity > 0) {
-        cloths.add(color)
-      }
+  const modelCount = Math.max(1, models.value.length)
+  const seen = new Set(sizes.value.map((r) => r.name))
+  for (const row of sizes.value) {
+    if (Object.prototype.hasOwnProperty.call(td, row.name)) {
+      row.materialPerSet = td[row.name]
+    }
+    if (!row.quantities) row.quantities = []
+    while (row.quantities.length < modelCount) row.quantities.push(0)
+    if (row.quantities.length > modelCount) row.quantities.length = modelCount
+  }
+  for (const [name, mps] of Object.entries(td)) {
+    if (seen.has(name)) continue
+    sizes.value.push({
+      name,
+      materialPerSet: mps,
+      quantities: Array.from({ length: modelCount }, () => 0),
+      editingMaterial: false,
+      editingQuantities: {},
     })
-    availableColors.value = Array.from(cloths)
-    syncModelColorsWithInventory()
-  } catch (error) {
-    console.error('获取染色布选项失败:', error)
-    availableColors.value = []
+    seen.add(name)
   }
+}
+
+/** 将当前模板重置为耗料表默认行 + 数量清零（不改变型号列数习惯） */
+const applyDefaultTemplateForm = (templateKey) => {
+  const templateData = templatesData[templateKey]
+  if (!templateData) return
+  const modelCount = Math.max(1, models.value.length)
+  const newSizes = []
+  for (const [name, materialPerSet] of Object.entries(templateData)) {
+    newSizes.push({
+      name,
+      materialPerSet,
+      quantities: Array.from({ length: modelCount }, () => 0),
+    })
+  }
+  sizes.value = newSizes
+  const templateName = templateTypeNames[templateKey] || templateKey
+  if (models.value.length > 0) {
+    models.value[0].name = templateName
+  } else {
+    models.value.push({ name: templateName, color: '', dyed_material_id: null })
+  }
+  void refreshDyedFabricOptions()
+}
+
+/** 切换模板：保留数量/布料等；表头型号名与耗料/套随当前模板更新 */
+const onTemplateChoiceChange = () => {
+  syncFormWithTemplateSelection(currentTemplate.value)
+  void refreshDyedFabricOptions()
+  persistProductionFormToStorage()
 }
 
 const refreshData = () => {
-  // 重新加载当前模板数据
-  changeTemplate()
-  // 显示刷新成功提示
+  clearProductionFormStorage()
+  applyDefaultTemplateForm(currentTemplate.value)
   ElMessage.success('数据已刷新')
 }
 
@@ -1094,15 +1371,204 @@ const groupMode = ref('date_type')
 const sortMode = ref('date_desc')
 const CUSTOMER_STORAGE_KEY = 'production_customers_v1'
 
-// 模板类型名称映射
-const templateTypeNames = {
-  f116: 'F116',
-  erDai: '二代',
-  728: '728',
-  danKu: '单裤',
-  g2WaKu: 'G2蛙裤',
-  BDU: 'BDU',
-  IX7danKu: 'IX7单裤'
+/** 仓库节点（完工入库选仓用） */
+const warehouseNodes = ref([])
+const saveFormAccessoriesDelivered = ref(false)
+
+const dyedFabricDrawerVisible = ref(false)
+const dyedFabricDrawerFilter = ref('')
+const dyedFabricDrawerTargetModel = ref(null)
+
+const filteredDyedFabricOptions = computed(() => {
+  const q = (dyedFabricDrawerFilter.value || '').trim().toLowerCase()
+  const opts = dyedFabricOptions.value || []
+  if (!q) return opts
+  return opts.filter((o) => (o.label || '').toLowerCase().includes(q))
+})
+
+const completeProductionVisible = ref(false)
+const completePlanForCompletion = ref(null)
+const completeProductionRows = ref([])
+
+function planFactoryId(plan) {
+  if (!plan) return null
+  const nested = plan.factory
+  if (nested && typeof nested === 'object' && nested.id != null) return Number(nested.id)
+  if (plan.factory_id != null) return Number(plan.factory_id)
+  return null
+}
+
+function warehouseNodeFactoryId(w) {
+  const v = w?.factory
+  if (v == null) return null
+  return typeof v === 'object' && v.id != null ? Number(v.id) : Number(v)
+}
+
+const warehousesForComplete = computed(() => {
+  const plan = completePlanForCompletion.value
+  const fid = planFactoryId(plan)
+  const list = warehouseNodes.value.filter((w) => w.warehouse_type === 'factory' && w.is_active !== false)
+  if (fid == null) return list
+  return list.filter((w) => warehouseNodeFactoryId(w) === fid)
+})
+
+/** 完工入库弹窗：展示系统将要使用的工厂仓（与后端不传 warehouse_id 时的解析一致） */
+const completeInboundUi = computed(() => {
+  const plan = completePlanForCompletion.value
+  if (!plan) {
+    return { status: 'idle', message: '' }
+  }
+  const fid = planFactoryId(plan)
+  if (fid == null) {
+    return {
+      status: 'no_factory',
+      message: '当前排产未设置目标工厂，无法自动确定入库仓。请先在排产表单中为该计划选择目标工厂后再完工入库。',
+    }
+  }
+  const w = warehousesForComplete.value[0]
+  if (!w) {
+    return {
+      status: 'no_warehouse',
+      message:
+        '未找到该目标工厂下已启用的工厂仓。请在「仓库主数据」中维护绑定该工厂的工厂仓，或在「工厂」中新建该工厂（保存时会自动创建对应工厂仓）。',
+    }
+  }
+  return { status: 'ok', warehouseName: w.name }
+})
+
+const fetchWarehouseNodesOnly = async () => {
+  try {
+    const wh = await api.get('/warehouse-nodes/')
+    const wl = wh.data
+    warehouseNodes.value = Array.isArray(wl) ? wl : wl?.results || []
+  } catch (e) {
+    console.error('加载仓库失败', e)
+  }
+}
+
+const buildCompletionRows = (plan) => {
+  const sizesPlan = plan.sizes_data || plan.sizes || []
+  const modelsData = plan.models_data || plan.models || []
+  const comp = plan.size_completion || []
+  const rows = []
+  sizesPlan.forEach((sz, si) => {
+    if (!sz || typeof sz !== 'object') return
+    const qs = sz.quantities || []
+    const compRow = si < comp.length && comp[si]?.completed_quantities ? comp[si].completed_quantities : []
+    ;(qs || []).forEach((pq, mi) => {
+      const planned = Number(pq) || 0
+      if (planned <= 0) return
+      const done = mi < compRow.length ? Number(compRow[mi]) || 0 : 0
+      const modelLabel = modelsData[mi]?.name || `型号${mi + 1}`
+      rows.push({
+        size_name: sz.name,
+        model_index: mi,
+        modelLabel,
+        planned,
+        done_accum: done,
+        qty_this_batch: 0,
+      })
+    })
+  })
+  return rows
+}
+
+const onCompleteProductionDialogClosed = () => {
+  completePlanForCompletion.value = null
+}
+
+const formatFabricPickLabel = (model) => {
+  const id = model?.dyed_material_id
+  if (id == null) return '点击选择染色布（颜色·名称·库存）'
+  const opt = dyedFabricOptions.value.find((o) => o.id === id)
+  return opt?.label || `染色布 #${id}`
+}
+
+const openDyedFabricDrawer = (_modelIndex, model) => {
+  dyedFabricDrawerTargetModel.value = model
+  dyedFabricDrawerFilter.value = ''
+  dyedFabricDrawerVisible.value = true
+}
+
+const pickDyedFabricFromDrawer = (opt) => {
+  const model = dyedFabricDrawerTargetModel.value
+  if (!model || !opt) return
+  model.dyed_material_id = opt.id
+  onDyedFabricChange(model)
+  updateIncomingMaterials()
+  dyedFabricDrawerVisible.value = false
+}
+
+const clearDyedFabricInDrawer = () => {
+  const model = dyedFabricDrawerTargetModel.value
+  if (!model) return
+  model.dyed_material_id = null
+  onDyedFabricChange(model)
+  updateIncomingMaterials()
+  dyedFabricDrawerVisible.value = false
+}
+
+const openCompleteProductionDialog = async (plan) => {
+  await fetchWarehouseNodesOnly()
+  completePlanForCompletion.value = plan
+  completeProductionRows.value = buildCompletionRows(plan)
+  completeProductionVisible.value = true
+}
+
+const submitCompleteProduction = async () => {
+  const plan = completePlanForCompletion.value
+  if (!plan) return
+  const lines = []
+  for (const row of completeProductionRows.value) {
+    const n = Math.floor(Number(row.qty_this_batch) || 0)
+    if (n > 0) {
+      lines.push({
+        size_name: row.size_name,
+        model_index: row.model_index,
+        qty_this_batch: n,
+      })
+    }
+  }
+  if (lines.length === 0) {
+    ElMessage.warning('请填写至少一行本批入库数量')
+    return
+  }
+  if (completeInboundUi.value.status !== 'ok') {
+    ElMessage.warning(
+      completeInboundUi.value.status === 'no_factory'
+        ? '请先为排产选择目标工厂'
+        : '未找到该工厂的工厂仓，请先维护仓库或工厂后再试'
+    )
+    return
+  }
+  const body = { lines }
+  try {
+    const { data } = await api.post(`production-plan-details/${plan.id}/complete-production/`, body)
+    const idx = productionPlans.value.findIndex((p) => p.id === plan.id)
+    if (idx !== -1) productionPlans.value[idx] = data
+    Object.assign(plan, data)
+    ElMessage.success('完工入库已记账')
+    completeProductionVisible.value = false
+  } catch (e) {
+    const msg = e?.response?.data?.error || e?.response?.data?.detail || e?.message
+    ElMessage.error(msg || JSON.stringify(e?.response?.data || {}))
+  }
+}
+
+const patchPlanAccessories = async (plan, val) => {
+  try {
+    const { data } = await api.patch(`production-plan-details/${plan.id}/`, {
+      accessories_delivered: val,
+    })
+    const idx = productionPlans.value.findIndex((p) => p.id === plan.id)
+    if (idx !== -1) {
+      productionPlans.value[idx] = { ...productionPlans.value[idx], ...data }
+    }
+    Object.assign(plan, data)
+    ElMessage.success('辅料状态已更新')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || e?.response?.data || e?.message || '更新失败')
+  }
 }
 
 // 获取工厂列表
@@ -1269,23 +1735,28 @@ const saveCurrentPlan = async () => {
     ElMessage.warning('请至少添加一个型号')
     return
   }
-  if (!models.value[0].color) {
-    ElMessage.warning('请选择布料')
+  await refreshDyedFabricOptions()
+  if (dyedFabricOptions.value.length > 0 && !models.value[0].dyed_material_id) {
+    ElMessage.warning('请从下拉框选择具体染色布（含颜色、名称、备注与库存米数）')
     return
   }
-  
+  if (!models.value[0].color && !models.value[0].dyed_material_id) {
+    ElMessage.warning('请选择布料或先维护染色布库存')
+    return
+  }
+
   // 获取当前模板类型名称
   const typeName = templateTypeNames[currentTemplate.value] || currentTemplate.value
-  // 生成计划名称，格式为：F116 军绿 xxx布
   const model = models.value[0]
-  const clothName = model.color || '未知布料'
+  const opt = dyedFabricOptions.value.find((o) => o.id === model.dyed_material_id)
+  const clothLabel = opt ? opt.label : model.color || '未知布料'
   const modelName = model.name || typeName
-  const planName = `${modelName} ${clothName}`
-  
+  const planName = `${modelName} ${clothLabel}`
+
   const planData = {
     date: planDate.value,
     plan_type: typeName,
-    name: planName,
+    name: planName.length > 200 ? `${planName.slice(0, 197)}…` : planName,
     customer: (selectedCustomer.value || '').trim(),
     cloth_color: model.color || '',
     cloth_used: Number(totalMaterials.value) || 0,
@@ -1293,19 +1764,22 @@ const saveCurrentPlan = async () => {
     factory_id: selectedFactory.value,
     template: currentTemplate.value,
     models_data: JSON.parse(JSON.stringify(models.value)),
-    sizes_data: JSON.parse(JSON.stringify(sizes.value))
+    sizes_data: JSON.parse(JSON.stringify(sizes.value)),
+    accessories_delivered: saveFormAccessoriesDelivered.value,
   }
-  
+
   try {
     const response = await api.post('production-plan-details/', planData)
     productionPlans.value.push(response.data)
     addCustomerToOptions(planData.customer)
 
-    const clothName = models.value[0].color
     const remainingQty = parseFloat(remainingMaterials.value)
-    if (clothName && !isNaN(remainingQty)) {
-      await updateClothInventory(clothName, remainingQty)
+    if (!isNaN(remainingQty)) {
+      await updateClothInventory(model.dyed_material_id, model.color, remainingQty)
     }
+
+    clearProductionFormStorage()
+    applyDefaultTemplateForm(currentTemplate.value)
 
     ElMessage.success('计划保存成功')
   } catch (error) {
@@ -1315,14 +1789,19 @@ const saveCurrentPlan = async () => {
 }
 
 // 加载计划到表格
-const loadPlan = (plan) => {
+const loadPlan = async (plan) => {
   models.value = JSON.parse(JSON.stringify(plan.models_data || plan.models || []))
+  models.value.forEach((m) => {
+    if (m.dyed_material_id === undefined) m.dyed_material_id = null
+  })
   sizes.value = JSON.parse(JSON.stringify(plan.sizes_data || plan.sizes || []))
   currentTemplate.value = plan.template
   planDate.value = plan.date
   selectedCustomer.value = plan.customer || ''
   selectedFactory.value = plan.factory?.id || plan.factory_id || null
-  syncModelColorsWithInventory()
+  saveFormAccessoriesDelivered.value = !!plan.accessories_delivered
+  await refreshDyedFabricOptions()
+  persistProductionFormToStorage()
   ElMessage.success('计划已加载')
 }
 
@@ -1548,11 +2027,24 @@ const exportMaterials = () => {
 // 生命周期
 onMounted(async () => {
   loadCustomers()
-  await fetchAvailableColors()
-  changeTemplate()
+  const restored = loadProductionFormFromStorage()
+  if (!restored) {
+    applyDefaultTemplateForm(currentTemplate.value)
+  } else {
+    syncFormWithTemplateSelection(currentTemplate.value)
+    void refreshDyedFabricOptions()
+  }
   fetchFactories()
+  await fetchWarehouseNodesOnly()
   fetchProductionPlans()
-  loadClothInventory()
+})
+
+onBeforeUnmount(() => {
+  if (persistDraftTimer) {
+    clearTimeout(persistDraftTimer)
+    persistDraftTimer = null
+  }
+  persistProductionFormToStorage()
 })
 </script>
 
@@ -1561,6 +2053,14 @@ onMounted(async () => {
   padding: 20px;
   width: 100%;
   box-sizing: border-box;
+}
+
+.fabric-select-wide {
+  min-width: 200px;
+  max-width: min(100%, 440px);
+  width: min(100%, 440px);
+  margin-left: 10px;
+  vertical-align: middle;
 }
 
 .production-header {
@@ -1635,6 +2135,39 @@ onMounted(async () => {
 
 .template-left {
   flex: 1;
+  min-width: 0;
+}
+
+/* 模板 radio 换行：独立圆角与间距，避免 Element 中间项去左边框导致第二行错位、白线穿模 */
+.template-left .template-switch-radios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 100%;
+  overflow: visible;
+  row-gap: 8px;
+}
+
+.template-left .template-switch-radios :deep(.el-radio-button) {
+  margin-right: 0 !important;
+  margin-inline-end: 0 !important;
+}
+
+.template-left .template-switch-radios :deep(.el-radio-button__inner) {
+  border-radius: 4px !important;
+  border: 1px solid var(--el-border-color) !important;
+  border-left-width: 1px !important;
+  box-shadow: none !important;
+}
+
+.template-left .template-switch-radios :deep(.el-radio-button:first-child .el-radio-button__inner) {
+  border-radius: 4px !important;
+}
+
+.template-left .template-switch-radios :deep(.el-radio-button:last-child .el-radio-button__inner) {
+  border-radius: 4px !important;
 }
 
 .template-center {
@@ -2003,10 +2536,171 @@ body.dark-mode .editable-cell:hover {
 
 .plan-summary {
   display: flex;
-  gap: 15px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 15px;
   margin-top: 8px;
   font-size: 14px;
   color: #666;
+}
+
+.plan-summary .plan-acc {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.accessories-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.accessories-row .acc-label {
+  font-size: 13px;
+  color: #555;
+}
+
+html body.dark-mode .fabric-picker-trigger {
+  border-color: #4a4f58 !important;
+  background-color: #30343d !important;
+}
+
+html body.dark-mode .fabric-picker-text {
+  color: #e8eaed !important;
+}
+
+html body.dark-mode .fabric-drawer-item {
+  border-color: #4a4f58 !important;
+  background-color: #282c34;
+  color: #e8eaed !important;
+}
+
+html body.dark-mode .fabric-drawer-item .fabric-drawer-item-main {
+  color: #e8eaed !important;
+}
+
+html body.dark-mode .fabric-drawer-item:hover {
+  background-color: #323842 !important;
+}
+
+html body.dark-mode .fabric-drawer-item.active {
+  border-color: #79bbff !important;
+  background-color: #1a3d5c !important;
+  box-shadow: inset 0 0 0 1px rgba(121, 187, 255, 0.35);
+  color: #f0f7ff !important;
+}
+
+html body.dark-mode .fabric-drawer-item.active .fabric-drawer-item-main {
+  color: #f0f7ff !important;
+}
+
+.complete-hint {
+  font-size: 13px;
+  color: #666;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.inbound-warehouse-banner {
+  margin-bottom: 14px;
+}
+
+.inbound-ok {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.inbound-ok .lbl {
+  color: var(--el-text-color-secondary);
+}
+
+.inbound-ok .sub {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.fabric-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  padding: 5px 11px;
+  border-radius: var(--el-border-radius-base);
+  cursor: pointer;
+  border: 1px solid var(--el-border-color);
+  background: var(--el-fill-color-blank);
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.fabric-picker-trigger:hover {
+  border-color: var(--el-color-primary-light-5);
+}
+
+.fabric-picker-text {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+}
+
+.fabric-picker-caret {
+  flex-shrink: 0;
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
+}
+
+.fabric-drawer-filter {
+  margin-bottom: 12px;
+}
+
+.fabric-drawer-empty {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  padding: 12px 0;
+}
+
+.fabric-drawer-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: calc(70vh - 100px);
+  overflow-y: auto;
+}
+
+.fabric-drawer-item {
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.45;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.fabric-drawer-item:hover {
+  border-color: var(--el-color-primary-light-5);
+}
+
+.fabric-drawer-item.active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary-dark-2);
+}
+
+.fabric-drawer-item.active .fabric-drawer-item-main {
+  color: var(--el-color-primary-dark-2);
 }
 
 .plan-models {
@@ -2047,6 +2741,19 @@ html body.dark-mode .color-control h4 {
 
 html body.dark-mode .template-options {
   color: #e0e0e0 !important;
+}
+
+html body.dark-mode .template-left .template-switch-radios :deep(.el-radio-button__inner) {
+  border-color: #5a5f6a !important;
+  background-color: #2d2d2d !important;
+  color: #e0e0e0 !important;
+}
+
+html body.dark-mode .template-left .template-switch-radios :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  background-color: var(--el-color-primary) !important;
+  border-color: var(--el-color-primary) !important;
+  color: #fff !important;
+  box-shadow: none !important;
 }
 
 html body.dark-mode .production-table th {

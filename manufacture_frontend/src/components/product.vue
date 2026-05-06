@@ -1,31 +1,24 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import api from '../utils/axios'
-import { ElMessage } from 'element-plus'
-import { deleteWithUndo } from '../composables/deleteWithUndo.js'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import * as ExcelJS from 'exceljs'
-import ImportComponent from './ImportComponent.vue'
+import {
+  TEMPLATE_KEYS,
+  templateLabelForKey,
+  isKnownTemplateKey,
+} from '../constants/productionTemplates.js'
 
-// 响应式数据
 const products = ref([])
-const dialogVisible = ref(false)
 const editDialogVisible = ref(false)
-// 导入相关
-const importVisible = ref(false)
-const importProgress = ref(0)
-const importSuccessCount = ref(0)
-const importErrorCount = ref(0)
-const importErrors = ref([])
-const form = ref({
-  name: '',
-  colors: '',
-  specifications: []
-})
+const syncing = ref(false)
+
 const editForm = ref({
   id: '',
   name: '',
   colors: '',
-  specifications: []
+  specifications: [],
+  production_template_key: '',
 })
 
 // 尺码选项
@@ -46,155 +39,139 @@ onMounted(() => {
   fetchProducts()
 })
 
-// 数据获取
+function extractProductsList(data) {
+  if (Array.isArray(data)) return data
+  if (data && Array.isArray(data.results)) return data.results
+  return []
+}
+
 const fetchProducts = async () => {
   try {
     const response = await api.get('/products/')
-    products.value = response.data
+    products.value = extractProductsList(response.data)
   } catch (error) {
     console.error('Error fetching products:', error)
   }
 }
 
-// 表单操作
-const openDialog = () => {
-  form.value = {
-    name: '',
-    colors: '',
-    specifications: ''
+const productsByKey = computed(() => {
+  const m = {}
+  for (const p of products.value) {
+    const k = p.production_template_key
+    if (k) m[k] = p
   }
-  dialogVisible.value = true
+  return m
+})
+
+const templateProductRows = computed(() =>
+  TEMPLATE_KEYS.map((templateKey) => {
+    const p = productsByKey.value[templateKey]
+    return {
+      templateKey,
+      templateLabel: templateLabelForKey(templateKey),
+      id: p?.id,
+      name: p?.name ?? '',
+      colors: p?.colors ?? '',
+      specifications: p?.specifications ?? '',
+      missing: !p,
+    }
+  })
+)
+
+const orphanProducts = computed(() =>
+  products.value.filter(
+    (p) => p.production_template_key && !isKnownTemplateKey(p.production_template_key)
+  )
+)
+
+const syncFromCatalog = async () => {
+  syncing.value = true
+  try {
+    await api.post('/products/sync-from-catalog/')
+    ElMessage.success('已按系统模板补全缺失行')
+    await fetchProducts()
+  } catch (e) {
+    const d = e?.response?.data
+    let msg = '同步失败'
+    if (typeof d === 'string') msg = d
+    else if (d?.detail) msg = String(d.detail)
+    else if (d && typeof d === 'object') {
+      const first = Object.values(d)[0]
+      msg = Array.isArray(first) ? String(first[0]) : String(first)
+    } else if (e?.message) msg = e.message
+    ElMessage.error(msg)
+  } finally {
+    syncing.value = false
+  }
 }
 
-const openEditDialog = (product) => {
+const openEditTemplateRow = (row) => {
+  const p = productsByKey.value[row.templateKey]
+  if (!p) return
   editForm.value = {
-    id: product.id,
-    name: product.name,
-    colors: product.colors,
-    specifications: product.specifications ? product.specifications.split(',') : []
+    id: p.id,
+    name: p.name,
+    colors: p.colors,
+    specifications: p.specifications ? p.specifications.split(',') : [],
+    production_template_key: p.production_template_key,
   }
   editDialogVisible.value = true
 }
 
-const saveProduct = async () => {
-  try {
-    // 验证产品名称是否为空
-    if (!form.value.name || form.value.name.trim() === '') {
-      alert('产品名称不能为空')
-      return
-    }
-    
-    // 确保所有字段都是字符串类型
-    form.value.name = String(form.value.name || '')
-    form.value.colors = String(form.value.colors || '').replace(/，/g, ',')
-    form.value.specifications = Array.isArray(form.value.specifications) ? form.value.specifications.join(',') : String(form.value.specifications || '').replace(/，/g, ',')
-    
-    // 确保specifications字段不为空
-    if (!form.value.specifications || form.value.specifications.trim() === '') {
-      form.value.specifications = '无'
-    }
-    
-    console.log('Sending product data:', form.value)
-    console.log('Data types:', {
-      name: typeof form.value.name,
-      colors: typeof form.value.colors,
-      specifications: typeof form.value.specifications
-    })
-    
-    const response = await api.post('/products/', form.value)
-    console.log('Response:', response)
-    dialogVisible.value = false
-    fetchProducts()
-  } catch (error) {
-    console.error('Error saving product:', error)
-    console.error('Error response:', error.response)
-    if (error.response && error.response.data) {
-      console.error('Error data:', error.response.data)
-      // 显示具体的错误信息
-      if (typeof error.response.data === 'object') {
-        let errorMessages = ''
-        for (const [field, messages] of Object.entries(error.response.data)) {
-          if (Array.isArray(messages)) {
-            errorMessages += `${field}: ${messages.join(', ')}\n`
-          } else {
-            errorMessages += `${field}: ${messages}\n`
-          }
-        }
-        alert('保存失败:\n' + errorMessages)
-      } else {
-        alert('保存失败: ' + error.response.data)
-      }
-    } else {
-      console.error('Error without response:', error.message)
-      alert('保存失败: ' + error.message)
-    }
+const openEditOrphan = (product) => {
+  editForm.value = {
+    id: product.id,
+    name: product.name,
+    colors: product.colors,
+    specifications: product.specifications ? product.specifications.split(',') : [],
+    production_template_key: product.production_template_key,
   }
+  editDialogVisible.value = true
 }
 
 const updateProduct = async () => {
   try {
-    // 确保所有字段都是字符串类型
     editForm.value.name = String(editForm.value.name || '')
     editForm.value.colors = String(editForm.value.colors || '').replace(/，/g, ',')
-    editForm.value.specifications = Array.isArray(editForm.value.specifications) ? editForm.value.specifications.join(',') : String(editForm.value.specifications || '').replace(/，/g, ',')
-    
-    // 确保specifications字段不为空
-    if (!editForm.value.specifications || editForm.value.specifications.trim() === '') {
-      editForm.value.specifications = '无'
-    }
-    
-    console.log('Sending update data:', editForm.value)
-    console.log('Data types:', {
-      name: typeof editForm.value.name,
-      colors: typeof editForm.value.colors,
-      specifications: typeof editForm.value.specifications
+    let specs = Array.isArray(editForm.value.specifications)
+      ? editForm.value.specifications.join(',')
+      : String(editForm.value.specifications || '').replace(/，/g, ',')
+    if (!specs.trim()) specs = '无'
+
+    await api.patch(`/products/${editForm.value.id}/`, {
+      name: editForm.value.name,
+      colors: editForm.value.colors,
+      specifications: specs,
     })
-    
-    await api.put(`/products/${editForm.value.id}/`, editForm.value)
     editDialogVisible.value = false
     fetchProducts()
+    ElMessage.success('已保存')
   } catch (error) {
     console.error('Error updating product:', error)
-    if (error.response && error.response.data) {
-      console.error('Error data:', error.response.data)
-      if (typeof error.response.data === 'object') {
-        let errorMessages = ''
-        for (const [field, messages] of Object.entries(error.response.data)) {
-          if (Array.isArray(messages)) {
-            errorMessages += `${field}: ${messages.join(', ')}\n`
-          } else {
-            errorMessages += `${field}: ${messages}\n`
-          }
-        }
-        alert('更新失败:\n' + errorMessages)
-      } else {
-        alert('更新失败: ' + error.response.data)
+    const d = error.response?.data
+    if (typeof d === 'object' && d) {
+      const parts = []
+      for (const [field, messages] of Object.entries(d)) {
+        parts.push(`${field}: ${Array.isArray(messages) ? messages.join(', ') : messages}`)
       }
+      ElMessage.error(parts.join('；') || '更新失败')
     } else {
-      console.error('Error without response:', error.message)
-      alert('更新失败: ' + error.message)
+      ElMessage.error('更新失败')
     }
   }
 }
 
-const deleteProduct = async (row) => {
+const deleteOrphanProduct = async (row) => {
   try {
-    await deleteWithUndo({
-      confirmMessage: `确定删除产品「${row.name}」？`,
-      deleteFn: () => api.delete(`/products/${row.id}/`),
-      undo: {
-        post: '/products/',
-        payload: {
-          name: row.name,
-          colors: row.colors || '',
-          specifications: row.specifications || '',
-        },
-      },
-      onSuccess: fetchProducts,
-      successMessage: '产品已删除',
-    })
+    await ElMessageBox.confirm(`确定删除「${row.name}」？仅适用于迁移遗留等非模板线产品。`, '确认删除')
+    await api.delete(`/products/${row.id}/`)
+    ElMessage.success('已删除')
+    fetchProducts()
   } catch (e) {
-    console.error('Error deleting product:', e)
+    if (e !== 'cancel') {
+      const msg = e?.response?.data?.detail || e?.response?.data || e?.message || '删除失败'
+      ElMessage.error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+    }
   }
 }
 
@@ -220,7 +197,7 @@ const exportProducts = async () => {
     const worksheet = workbook.addWorksheet('产品记录')
     
     // 设置表头
-    const headers = ['产品名称', '颜色选项', '规格参数']
+    const headers = ['排产模板键', '产品名称', '颜色选项', '规格参数']
     worksheet.addRow(headers)
     
     // 设置表头样式
@@ -236,14 +213,15 @@ const exportProducts = async () => {
     
     // 设置列宽
     worksheet.columns = [
+      { header: '排产模板键', key: 'key', width: 14 },
       { header: '产品名称', key: 'name', width: 20 },
       { header: '颜色选项', key: 'colors', width: 30 },
       { header: '规格参数', key: 'specifications', width: 30 }
     ]
-    
-    // 遍历产品数据，添加每一行
+
     for (const product of products.value) {
       worksheet.addRow([
+        product.production_template_key || '—',
         product.name,
         product.colors || '无',
         product.specifications || '无'
@@ -256,7 +234,7 @@ const exportProducts = async () => {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `产品记录_${new Date().toISOString().split('T')[0]}.xlsx`
+    link.download = `模板成品_${new Date().toISOString().split('T')[0]}.xlsx`
     link.click()
     URL.revokeObjectURL(url)
     
@@ -279,81 +257,6 @@ const exportProducts = async () => {
   }
 }
 
-const handleFileUpload = (event) => {
-  const file = event.target.files[0]
-  if (file) {
-    const reader = new FileReader()
-    reader.onload = async (e) => {
-      try {
-        const importedProducts = JSON.parse(e.target.result)
-        for (const product of importedProducts) {
-          await api.post('/products/', product)
-        }
-        fetchProducts()
-        alert('产品数据导入成功！')
-      } catch (error) {
-        console.error('Error importing products:', error)
-        alert('产品数据导入失败！')
-      }
-    }
-    reader.readAsText(file)
-  }
-}
-
-// 导入功能
-const openImportDialog = () => {
-  importVisible.value = true
-}
-
-const validateImportData = (data) => {
-  const errors = []
-  data.forEach((row, index) => {
-    if (!row.name) {
-      errors.push(`第 ${index + 1} 行：产品名称不能为空`)
-    }
-  })
-  return errors
-}
-
-const handleImportSuccess = async (data) => {
-  importProgress.value = 0
-  importSuccessCount.value = 0
-  importErrorCount.value = 0
-  importErrors.value = []
-
-  const total = data.length
-  for (let i = 0; i < total; i++) {
-    const row = data[i]
-    try {
-      // 准备产品数据
-      const productData = {
-        name: row.name,
-        colors: row.colors || '',
-        specifications: row.specifications || ''
-      }
-
-      // 确保颜色和规格格式正确
-      productData.colors = String(productData.colors).replace(/，/g, ',')
-      productData.specifications = String(productData.specifications).replace(/，/g, ',')
-
-      // 确保specifications字段不为空
-      if (!productData.specifications || productData.specifications.trim() === '') {
-        productData.specifications = '无'
-      }
-
-      // 保存数据
-      await api.post('/products/', productData)
-      importSuccessCount.value++
-    } catch (error) {
-      importErrorCount.value++
-      importErrors.value.push(`第 ${i + 1} 行：${error.message}`)
-    }
-    importProgress.value = Math.round((i + 1) / total * 100)
-  }
-
-  await fetchProducts()
-  importVisible.value = false
-}
 </script>
 
 <template>
@@ -361,85 +264,73 @@ const handleImportSuccess = async (data) => {
     <el-card shadow="hover">
       <template #header>
         <div class="card-header">
-          <span>产品管理</span>
+          <span>模板成品</span>
           <div class="header-actions">
-            <el-button type="primary" @click="openDialog">添加产品</el-button>
-            <el-button type="success" @click="exportProducts">导出产品</el-button>
-            <el-button type="warning" @click="openImportDialog">导入产品</el-button>
+            <el-button type="primary" :loading="syncing" @click="syncFromCatalog">同步系统模板行</el-button>
+            <el-button type="success" @click="exportProducts">导出</el-button>
           </div>
         </div>
       </template>
-      
-      <el-table :data="products" style="width: 100%">
-        <el-table-column prop="name" label="产品名称" width="180" />
-        <el-table-column prop="colors" label="颜色选项" width="200" />
-        <el-table-column prop="specifications" label="规格参数" />
-        <el-table-column label="操作" width="180" align="center">
+      <p class="hint">
+        每条系统模板键对应一条成品档案（库存 SKU = 模板键 + 颜色 + 尺码）。缺行时点「同步系统模板行」；显示名与颜色/尺码提示可编辑，模板键不可改。
+      </p>
+      <el-table :data="templateProductRows" style="width: 100%" border>
+        <el-table-column prop="templateKey" label="模板键" width="100" />
+        <el-table-column prop="templateLabel" label="模板" width="100" />
+        <el-table-column prop="name" label="显示名称" min-width="140" />
+        <el-table-column prop="colors" label="颜色选项" width="180" />
+        <el-table-column prop="specifications" label="规格参数" min-width="120" />
+        <el-table-column label="状态" width="88">
           <template #default="{ row }">
-            <el-space :size="8" wrap>
-              <el-button type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
-              <el-button type="danger" size="small" @click="deleteProduct(row)">删除</el-button>
-            </el-space>
+            <el-tag v-if="row.missing" type="warning" size="small">待同步</el-tag>
+            <el-tag v-else type="success" size="small">已建档</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="100" align="center">
+          <template #default="{ row }">
+            <el-button
+              type="primary"
+              size="small"
+              :disabled="row.missing"
+              @click="openEditTemplateRow(row)"
+            >
+              编辑
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
+
+      <el-card v-if="orphanProducts.length" shadow="never" style="margin-top: 16px">
+        <template #header>迁移遗留（非当前模板清单）</template>
+        <el-table :data="orphanProducts" size="small">
+          <el-table-column prop="production_template_key" label="模板键" width="120" />
+          <el-table-column prop="name" label="名称" />
+          <el-table-column label="操作" width="160">
+            <template #default="{ row }">
+              <el-button type="primary" link size="small" @click="openEditOrphan(row)">编辑</el-button>
+              <el-button type="danger" link size="small" @click="deleteOrphanProduct(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
     </el-card>
-    
-    <!-- 添加产品对话框 -->
-    <el-dialog
-      v-model="dialogVisible"
-      title="添加产品"
-      width="500px"
-    >
-      <el-form :model="form" label-width="80px">
-        <el-form-item label="产品名称" required>
-          <el-input v-model="form.name" placeholder="输入产品名称" style="width: 100%" />
+
+    <el-dialog v-model="editDialogVisible" title="编辑模板成品" width="520px">
+      <el-form :model="editForm" label-width="100px">
+        <el-form-item label="模板键">
+          <el-input :model-value="editForm.production_template_key" disabled />
+        </el-form-item>
+        <el-form-item label="显示名称" required>
+          <el-input v-model="editForm.name" placeholder="可与模板中文名不同" style="width: 100%" />
         </el-form-item>
         <el-form-item label="颜色选项">
-          <el-input v-model="form.colors" placeholder="输入颜色选项，用逗号分隔" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="规格参数">
-          <el-select
-            v-model="form.specifications"
-            multiple
-            placeholder="选择规格参数"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="option in sizeOptions"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="saveProduct">保存</el-button>
-        </span>
-      </template>
-    </el-dialog>
-    
-    <!-- 编辑产品对话框 -->
-    <el-dialog
-      v-model="editDialogVisible"
-      title="编辑产品"
-      width="500px"
-    >
-      <el-form :model="editForm" label-width="80px">
-        <el-form-item label="产品名称" required>
-          <el-input v-model="editForm.name" placeholder="输入产品名称" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="颜色选项">
-          <el-input v-model="editForm.colors" placeholder="输入颜色选项，用逗号分隔" style="width: 100%" />
+          <el-input v-model="editForm.colors" placeholder="逗号分隔，供调拨与提示" style="width: 100%" />
         </el-form-item>
         <el-form-item label="规格参数">
           <el-select
             v-model="editForm.specifications"
             multiple
-            placeholder="选择规格参数"
+            placeholder="选择尺码"
             style="width: 100%"
           >
             <el-option
@@ -458,21 +349,19 @@ const handleImportSuccess = async (data) => {
         </span>
       </template>
     </el-dialog>
-    
-    <!-- 导入组件 -->
-    <ImportComponent
-      v-model:visible="importVisible"
-      :validate="validateImportData"
-      @success="handleImportSuccess"
-      :fields="['name', 'colors', 'specifications']"
-      :field-labels="{ name: '产品名称', colors: '颜色选项', specifications: '规格参数' }"
-    />
   </div>
 </template>
 
 <style scoped>
 .product-management {
   padding: 20px 0;
+}
+
+.hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 
 .card-header {

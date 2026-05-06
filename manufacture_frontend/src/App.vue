@@ -97,7 +97,7 @@ onMounted(() => {
           </el-menu-item>
           <el-menu-item index="product">
             <el-icon><Goods /></el-icon>
-            <span>产品管理</span>
+            <span>模板成品</span>
           </el-menu-item>
           <el-menu-item index="material">
             <el-icon><Box /></el-icon>
@@ -225,16 +225,34 @@ html, body {
 .dark-mode .el-table {
   background-color: var(--card-bg);
   color: var(--text-color);
+  /* 与 EP 内部 hover 变量对齐，避免移出鼠标后 td 回到浅色主题默认白底 */
+  --el-table-row-hover-bg-color: #343842;
+  --el-table-tr-bg-color: #30343d;
+  --el-fill-color-lighter: #30343d;
 }
 
-.dark-mode .el-table th {
-  background-color: var(--header-bg);
-  color: var(--text-color);
-  border-color: var(--border-color);
+.dark-mode .el-table th.el-table__cell {
+  background-color: var(--header-bg) !important;
+  color: var(--text-color) !important;
+  border-color: var(--border-color) !important;
 }
 
-.dark-mode .el-table td {
-  border-color: var(--border-color);
+.dark-mode .el-table td.el-table__cell {
+  background-color: #30343d !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-color) !important;
+}
+
+.dark-mode .el-table__body tr:hover > td.el-table__cell {
+  background-color: #343842 !important;
+}
+
+.dark-mode .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background-color: #2a2f38 !important;
+}
+
+.dark-mode .el-table__body tr.el-table__row--striped:hover > td.el-table__cell {
+  background-color: #343842 !important;
 }
 
 .dark-mode .el-aside {
@@ -338,6 +356,33 @@ html, body {
   color: var(--text-color);
 }
 
+/* 抽屉内表格：避免鼠标移出行后恢复成浅色底闪白 */
+.dark-mode .el-drawer__body .el-table {
+  --el-table-row-hover-bg-color: #343842;
+  --el-table-tr-bg-color: #30343d;
+  background-color: var(--card-bg);
+}
+
+.dark-mode .el-drawer__body .el-table th.el-table__cell {
+  background-color: var(--header-bg) !important;
+}
+
+.dark-mode .el-drawer__body .el-table td.el-table__cell {
+  background-color: #30343d !important;
+}
+
+.dark-mode .el-drawer__body .el-table__body tr:hover > td.el-table__cell {
+  background-color: #343842 !important;
+}
+
+.dark-mode .el-drawer__body .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background-color: #2a2f38 !important;
+}
+
+.dark-mode .el-drawer__body .el-table__body tr.el-table__row--striped:hover > td.el-table__cell {
+  background-color: #343842 !important;
+}
+
 .dark-mode .el-descriptions {
   --el-fill-color-blank: #30343d;
   --el-descriptions-item-bordered-label-background: #2b3038;
@@ -399,11 +444,6 @@ html, body {
 .dark-mode .el-textarea__inner::placeholder,
 .dark-mode .el-select__placeholder {
   color: #b5bcc8 !important;
-}
-
-.dark-mode .el-table__row:hover > td {
-  background-color: #343842 !important;
-  color: #f2f3f5 !important;
 }
 
 .dark-mode .el-select .el-tag {
@@ -534,16 +574,6 @@ html, body {
   border-color: #66b1ff !important;
 }
 
-/* 表格样式 */
-.dark-mode .el-table__row {
-  background-color: var(--card-bg) !important;
-  color: var(--text-color) !important;
-}
-
-.dark-mode .el-table__row:hover {
-  background-color: rgba(255, 255, 255, 0.05) !important;
-}
-
 /* 上传组件 */
 .dark-mode .el-upload {
   background-color: var(--card-bg) !important;
@@ -559,13 +589,6 @@ html, body {
 .dark-mode .chart-header {
   color: var(--text-color) !important;
   border-bottom-color: var(--border-color) !important;
-}
-
-/* 表格表头 */
-.dark-mode .el-table th {
-  background-color: var(--header-bg) !important;
-  color: var(--text-color) !important;
-  border-color: var(--border-color) !important;
 }
 
 /* 卡片组件 */
@@ -602,10 +625,115 @@ html, body {
   color: #dce1ea !important;
 }
 
-/* 表格单元格 */
-.dark-mode .el-table td {
-  border-color: var(--border-color) !important;
-  color: var(--text-color) !important;
+/*
+ * Teleport 到 body 的弹出层全局暗色（MessageBox / Message / Notification / Loading 等）。
+ * overlay 挂载在 html 后代下，与 .dark-mode 同树即可命中。
+ */
+html.dark-mode .el-overlay-message-box,
+html.dark-mode .el-overlay.is-message-box {
+  background-color: rgba(0, 0, 0, 0.55) !important;
+}
+
+html.dark-mode .el-message-box {
+  background-color: #2b3038 !important;
+  border: 1px solid #4a4f58 !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5) !important;
+}
+
+html.dark-mode .el-message-box__title,
+html.dark-mode .el-message-box__message,
+html.dark-mode .el-message-box__message p,
+html.dark-mode .el-message-box__container {
+  color: #e8eaed !important;
+}
+
+html.dark-mode .el-message-box__headerbtn .el-message-box__close {
+  color: #b5bcc8 !important;
+}
+
+html.dark-mode .el-message-box__btns .el-button--default {
+  background-color: #363b44 !important;
+  border-color: #4a4f58 !important;
+  color: #e8eaed !important;
+}
+
+html.dark-mode .el-message-box__btns .el-button--default:hover {
+  background-color: #404854 !important;
+  border-color: #5c6370 !important;
+}
+
+html.dark-mode .el-message-box__input .el-input__wrapper {
+  background-color: #363b44 !important;
+  box-shadow: 0 0 0 1px #4a4f58 inset !important;
+}
+
+html.dark-mode .el-message-box__input .el-input__inner {
+  color: #e8eaed !important;
+}
+
+html.dark-mode .el-message {
+  background-color: #2b3038 !important;
+  border-color: #4a4f58 !important;
+  color: #e8eaed !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+}
+
+html.dark-mode .el-message .el-message__content {
+  color: #e8eaed !important;
+}
+
+html.dark-mode .el-notification {
+  background-color: #2b3038 !important;
+  border-color: #4a4f58 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+}
+
+html.dark-mode .el-notification__title,
+html.dark-mode .el-notification__content,
+html.dark-mode .el-notification__description {
+  color: #e8eaed !important;
+}
+
+html.dark-mode .el-loading-mask {
+  background-color: rgba(18, 20, 26, 0.75) !important;
+}
+
+html.dark-mode .el-loading-spinner .path {
+  stroke: #79bbff !important;
+}
+
+html.dark-mode .el-loading-text {
+  color: #cfd4dc !important;
+}
+
+html.dark-mode .el-popconfirm {
+  border: 1px solid #4a4f58 !important;
+}
+
+html.dark-mode .el-picker-panel,
+html.dark-mode .el-picker__popper.el-popper,
+html.dark-mode .el-picker__popper {
+  --el-datepicker-border-color: #4a4f58 !important;
+  background-color: #2b3038 !important;
+  border-color: #4a4f58 !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5) !important;
+}
+
+html.dark-mode .el-picker-panel__body,
+html.dark-mode .el-date-picker__header-label,
+html.dark-mode .el-picker-panel__content,
+html.dark-mode .el-date-table td {
+  color: #e8eaed !important;
+}
+
+html.dark-mode .el-picker-panel .el-picker-panel__icon-btn .el-icon,
+html.dark-mode .el-picker-panel .el-picker-panel__icon-btn {
+  color: #b5bcc8 !important;
+}
+
+html.dark-mode .el-date-table td.in-range div,
+html.dark-mode .el-date-table td:hover div {
+  background-color: #3d4450 !important;
 }
 
 /* 修复:before伪元素样式 */

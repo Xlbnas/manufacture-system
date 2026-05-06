@@ -109,6 +109,10 @@ class DyeingOrder(models.Model):
     output_warehouse = models.ForeignKey(WarehouseNode, on_delete=models.PROTECT, verbose_name='入库仓')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft', verbose_name='状态')
     dyed_material = models.ForeignKey(Material, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_by_dyeing_order')
+    lost_quantity = models.DecimalField(
+        max_digits=12, decimal_places=2, verbose_name='产出损耗（约定未到货部分）', default=Decimal('0.00')
+    )
+    loss_note = models.CharField(max_length=500, verbose_name='损耗备注', blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -120,7 +124,7 @@ class DyeingOrder(models.Model):
 
 
 class DyeingReceipt(models.Model):
-    """染色单分批到货；每批按与到货米数 1:1 扣减坯布库存（与整单完成逻辑一致）。"""
+    """染色单分批到货；每批计入本单已收并累加染色布库存（不扣减坯布库存行）。"""
     order = models.ForeignKey(DyeingOrder, on_delete=models.CASCADE, related_name='receipts', verbose_name='染色单')
     quantity = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='本批到货米数')
     receipt_date = models.DateField(verbose_name='到货日期')
@@ -182,6 +186,12 @@ class Product(models.Model):
     name = models.CharField(max_length=100, verbose_name='产品名称', unique=True)
     colors = models.CharField(max_length=200, verbose_name='颜色选项', default='')
     specifications = models.CharField(max_length=200, verbose_name='规格参数', default='')
+    production_template_key = models.CharField(
+        max_length=50,
+        verbose_name='排产模板键',
+        unique=True,
+        help_text='与生产页的模板 radio 取值一致（如 f116、erDai）；每条 Product 对应一条模板线',
+    )
 
     def __str__(self):
         return self.name
@@ -217,6 +227,13 @@ class ProductionPlanDetail(models.Model):
     template = models.CharField(max_length=50, verbose_name='模板类型')
     models_data = models.JSONField(verbose_name='型号数据', default=list)
     sizes_data = models.JSONField(verbose_name='尺码数据', default=list)
+    size_completion = models.JSONField(
+        verbose_name='各尺码已累计完工数量',
+        default=list,
+        help_text='结构与 sizes_data 对应：每项含 name 与 completed_quantities 数组（与 quantities 对齐）',
+    )
+    accessories_delivered = models.BooleanField(verbose_name='辅料已到齐', default=False)
+    accessories_delivered_at = models.DateTimeField(verbose_name='辅料到齐标记时间', blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='创建时间')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='更新时间')
 

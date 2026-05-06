@@ -13,9 +13,10 @@ from datetime import timedelta
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
+from production.template_catalog import TEMPLATE_LABELS
 from production.models import (
     DyeingOrder,
     Factory,
@@ -144,11 +145,19 @@ class Command(BaseCommand):
                 factory=None,
             )
 
-            product = Product.objects.create(
-                name=f"{DEMO}战术长裤F116",
-                colors="军绿,黑色,卡其",
-                specifications="S,M,L,XL,XXL",
-            )
+            product_by_key = {}
+            for tmpl_key, tmpl_label in TEMPLATE_LABELS.items():
+                colors = "军绿,黑色,卡其" if tmpl_key == "f116" else "卡其,黑色,军绿"
+                p, _ = Product.objects.get_or_create(
+                    production_template_key=tmpl_key,
+                    defaults={
+                        "name": f"{DEMO}{tmpl_label}成品",
+                        "colors": colors,
+                        "specifications": "XS,S,M,L,XL,XXL",
+                    },
+                )
+                product_by_key[tmpl_key] = p
+            product = product_by_key["f116"]
 
             # 染色布（生产计划选布、来料计算）
             dyed = Material.objects.create(
@@ -249,7 +258,7 @@ class Command(BaseCommand):
                 ],
             )
 
-            # 染色单草稿（在「外协订单」登记到货或整单收齐）
+            # 染色单草稿（与线上一致：建单即扣坯布约定产量）
             DyeingOrder.objects.create(
                 raw_material=raw,
                 supplier=sup_dye,
@@ -259,6 +268,7 @@ class Command(BaseCommand):
                 output_warehouse=wh_factory,
                 status="draft",
             )
+            Material.objects.filter(pk=raw.id).update(quantity=F('quantity') - Decimal('400.00'))
 
             WeavingOrder.objects.create(
                 supplier=sup_weave,
