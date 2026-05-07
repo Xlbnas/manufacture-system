@@ -290,6 +290,7 @@ class TransferOrder(models.Model):
         ('draft', '草稿'),
         ('completed', '已完成'),
         ('cancelled', '已取消'),
+        ('reversed', '已冲销'),
     )
     from_warehouse = models.ForeignKey(WarehouseNode, on_delete=models.PROTECT, related_name='transfer_from_orders')
     to_warehouse = models.ForeignKey(WarehouseNode, on_delete=models.PROTECT, related_name='transfer_to_orders')

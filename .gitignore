@@ -31,10 +31,13 @@ build/
 *.db
 backups/
 **/backups/
+media/
+**/media/
 
 # 编辑器文件
 .vscode/
 .idea/
+.trae/
 *.swp
 *.swo
 *~

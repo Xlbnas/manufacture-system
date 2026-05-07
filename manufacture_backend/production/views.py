@@ -9,7 +9,7 @@ from urllib import error, request as urlrequest
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import transaction
-from django.db.models import F
+from django.db.models import Count, F
 from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -706,6 +706,153 @@ class TransferOrderViewSet(viewsets.ModelViewSet):
 
         return Response({'message': '调拨完成'})
 
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        order = self.get_object()
+        if order.status != 'draft':
+            return Response({'error': '仅草稿状态可取消'}, status=status.HTTP_400_BAD_REQUEST)
+        order.status = 'cancelled'
+        order.save(update_fields=['status'])
+        return Response(self.get_serializer(order).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def revise(self, request, pk=None):
+        order = self.get_object()
+        if order.status != 'draft':
+            return Response({'error': '仅草稿状态可编辑'}, status=status.HTTP_400_BAD_REQUEST)
+
+        data = request.data or {}
+        from_id = data.get('from_warehouse_id', order.from_warehouse_id)
+        to_id = data.get('to_warehouse_id', order.to_warehouse_id)
+        note = data.get('note', order.note or '')
+        items_in = data.get('items', None)
+
+        try:
+            from_id = int(from_id)
+            to_id = int(to_id)
+        except (TypeError, ValueError):
+            return Response({'error': '来源仓/目标仓参数无效'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from_wh = WarehouseNode.objects.filter(pk=from_id).first()
+        to_wh = WarehouseNode.objects.filter(pk=to_id).first()
+        if from_wh is None or to_wh is None:
+            return Response({'error': '来源仓或目标仓不存在'}, status=status.HTTP_400_BAD_REQUEST)
+        if from_wh.warehouse_type != 'factory':
+            return Response({'error': '来源仓须为工厂仓（成品从工厂仓调出）'}, status=status.HTTP_400_BAD_REQUEST)
+        if to_wh.warehouse_type != 'local':
+            return Response({'error': '目标仓须为本地仓'}, status=status.HTTP_400_BAD_REQUEST)
+        if from_wh.id == to_wh.id:
+            return Response({'error': '来源仓与目标仓不能相同'}, status=status.HTTP_400_BAD_REQUEST)
+
+        normalized_items = None
+        if items_in is not None:
+            if not isinstance(items_in, list) or not items_in:
+                return Response({'error': '明细 items 必须是非空数组'}, status=status.HTTP_400_BAD_REQUEST)
+            normalized_items = []
+            for idx, x in enumerate(items_in):
+                if not isinstance(x, dict):
+                    return Response({'error': f'第 {idx + 1} 行明细格式错误'}, status=status.HTTP_400_BAD_REQUEST)
+                pid = x.get('product_id')
+                color = str(x.get('color') or '').strip()
+                size = str(x.get('size') or '').strip()
+                qty_raw = x.get('quantity')
+                try:
+                    pid = int(pid)
+                    qty = int(qty_raw)
+                except (TypeError, ValueError):
+                    return Response({'error': f'第 {idx + 1} 行产品或数量无效'}, status=status.HTTP_400_BAD_REQUEST)
+                if qty <= 0:
+                    return Response({'error': f'第 {idx + 1} 行数量须大于 0'}, status=status.HTTP_400_BAD_REQUEST)
+                if not color or not size:
+                    return Response({'error': f'第 {idx + 1} 行颜色/尺码不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+                product = Product.objects.filter(pk=pid).first()
+                if product is None:
+                    return Response({'error': f'第 {idx + 1} 行产品不存在'}, status=status.HTTP_400_BAD_REQUEST)
+                normalized_items.append(
+                    {
+                        'product': product,
+                        'color': color,
+                        'size': size,
+                        'quantity': qty,
+                    }
+                )
+
+        with transaction.atomic():
+            locked = TransferOrder.objects.select_for_update().get(pk=order.pk)
+            locked.from_warehouse = from_wh
+            locked.to_warehouse = to_wh
+            locked.note = str(note or '')
+            locked.save(update_fields=['from_warehouse', 'to_warehouse', 'note'])
+            if normalized_items is not None:
+                locked.items.all().delete()
+                for item in normalized_items:
+                    locked.items.create(**item)
+
+        order.refresh_from_db()
+        return Response(self.get_serializer(order).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def reverse(self, request, pk=None):
+        """
+        已执行调拨的库存冲销：从目标本地仓扣回，加回来源工厂仓（与 complete 相反）。
+        仅当状态为 completed 且本地仓各 SKU 数量足够时可冲销。
+        """
+        order = self.get_object()
+        if order.status != 'completed':
+            return Response(
+                {'error': '仅「已执行」状态的调拨单可冲销（将货从本地仓退回工厂仓）'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            locked = (
+                TransferOrder.objects.select_for_update()
+                .prefetch_related('items')
+                .get(pk=order.pk)
+            )
+            if locked.status != 'completed':
+                return Response({'error': '状态已变更，请刷新后重试'}, status=status.HTTP_409_CONFLICT)
+
+            items = list(locked.items.select_related('product').all())
+            for item in items:
+                to_row = Warehouse.objects.filter(
+                    warehouse=locked.to_warehouse,
+                    product=item.product,
+                    color=item.color,
+                    size=item.size,
+                ).first()
+                if to_row is None or to_row.quantity < item.quantity:
+                    return Response(
+                        {
+                            'error': (
+                                f'本地仓库存不足，无法冲销：{item.product.name} '
+                                f'{item.color}/{item.size}（需要 {item.quantity}）'
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            for item in items:
+                to_base = _get_stock(locked.to_warehouse, item.product, item.color, item.size)
+                fr_base = _get_stock(locked.from_warehouse, item.product, item.color, item.size)
+                to_s = Warehouse.objects.select_for_update().get(pk=to_base.pk)
+                fr_s = Warehouse.objects.select_for_update().get(pk=fr_base.pk)
+                if to_s.quantity < item.quantity:
+                    return Response(
+                        {'error': f'库存并发变化，请重试：{item.product.name} {item.color}/{item.size}'},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                to_s.quantity -= item.quantity
+                fr_s.quantity += item.quantity
+                to_s.save(update_fields=['quantity'])
+                fr_s.save(update_fields=['quantity'])
+
+            locked.status = 'reversed'
+            locked.save(update_fields=['status'])
+
+        order.refresh_from_db()
+        return Response(self.get_serializer(order).data, status=status.HTTP_200_OK)
+
 
 def _read_env_map(env_file: Path):
     data = {}
@@ -784,10 +931,28 @@ def _ai_build_system_context(data_scope, compact=False):
             Material.objects.values('id', 'type', 'name', 'quantity', 'unit', 'stock_date').order_by('-id')[:material_limit]
         )
     if data_scope in ('all', 'product'):
-        context['products'] = list(Product.objects.values('id', 'name', 'colors', 'specifications')[:product_limit])
+        context['products'] = list(
+            Product.objects.values(
+                'id',
+                'name',
+                'production_template_key',
+                'colors',
+                'specifications',
+            )[:product_limit]
+        )
     if data_scope in ('all', 'plan'):
         context['production_plan_details'] = list(
-            ProductionPlanDetail.objects.values('id', 'date', 'plan_type', 'name', 'template', 'created_at').order_by('-created_at')[:plan_limit]
+            ProductionPlanDetail.objects.values(
+                'id',
+                'date',
+                'plan_type',
+                'name',
+                'template',
+                'factory_id',
+                'customer',
+                'cloth_color',
+                'created_at',
+            ).order_by('-created_at')[:plan_limit]
         )
     if data_scope in ('all', 'warehouse'):
         context['warehouse'] = list(
@@ -795,15 +960,21 @@ def _ai_build_system_context(data_scope, compact=False):
         )
     if data_scope in ('all', 'outbound'):
         context['transfer_orders'] = list(
-            TransferOrder.objects.values(
+            TransferOrder.objects.annotate(item_count=Count('items'))
+            .values(
                 'id',
                 'from_warehouse__name',
                 'to_warehouse__name',
                 'status',
+                'item_count',
                 'note',
                 'created_at',
                 'completed_at',
-            ).order_by('-id')[:transfer_limit]
+            )
+            .order_by('-id')[:transfer_limit]
+        )
+        context['transfer_order_status_legend'] = (
+            '调拨单 status 取值：draft=草稿；completed=已执行；cancelled=已取消；reversed=已冲销（库存已从本地仓退回来源工厂仓）。'
         )
     summary = {
         'factory_count': Factory.objects.count(),
@@ -822,7 +993,12 @@ def _ai_build_user_payload(query, content, data_scope, compact):
         '用户问题': query or '请根据数据进行总结',
         '用户补充文本': content or '',
         '系统数据上下文': system_context,
-        '输出要求': '请使用简体中文，结构化输出，避免编造不存在的数据。',
+        '输出要求': (
+            '请使用简体中文，结构化输出，避免编造不存在的数据。'
+            '成品与排产以 production_template_key / template 字段为准；'
+            'transfer_orders 为工厂仓→本地仓的成品调拨单（非原料出库单），'
+            'status 含义见上下文中的 transfer_order_status_legend（若有）。'
+        ),
     }
 
 
@@ -1089,7 +1265,7 @@ def ai_summarize_view(request):
                 try_compact_after_failure(reason_http=exc.code)
             except TimeoutError:
                 return Response(
-                    {'error': 'AI 服务超时，请重试或缩小数据范围（如选择“出库/仓库”）'},
+                    {'error': 'AI 服务超时，请重试或缩小数据范围（如选择“调拨单/仓库”）'},
                     status=status.HTTP_504_GATEWAY_TIMEOUT,
                 )
             except Exception as exc2:
@@ -1104,7 +1280,7 @@ def ai_summarize_view(request):
             try_compact_after_failure()
         except TimeoutError:
             return Response(
-                {'error': 'AI 服务超时，请重试或缩小数据范围（如选择“出库/仓库”）'},
+                {'error': 'AI 服务超时，请重试或缩小数据范围（如选择“调拨单/仓库”）'},
                 status=status.HTTP_504_GATEWAY_TIMEOUT,
             )
         except Exception as exc:
@@ -1119,7 +1295,7 @@ def ai_summarize_view(request):
             pass
 
     if not summary:
-        hint = '请重试或缩小数据范围（如选择“出库/仓库”）。'
+        hint = '请重试或缩小数据范围（如选择“调拨单/仓库”）。'
         if finish_reason:
             return Response(
                 {'error': f'AI 服务返回为空（finish_reason={finish_reason}），{hint}'},

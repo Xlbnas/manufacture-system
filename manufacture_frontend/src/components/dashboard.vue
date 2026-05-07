@@ -363,6 +363,8 @@ export default {
         
         const option = {
           tooltip: {
+            appendToBody: true,
+            confine: true,
             trigger: 'axis',
             axisPointer: {
               type: 'shadow',
@@ -616,6 +618,8 @@ export default {
 
         const option = {
           tooltip: {
+            appendToBody: true,
+            confine: true,
             trigger: 'item',
             backgroundColor: 'rgba(0, 0, 0, 0.8)',
             borderColor: '#409EFF',
@@ -627,6 +631,27 @@ export default {
             formatter: function(params) {
               return params.seriesName + '<br/>' +
                      params.marker + params.name + ': ' + params.value + ' (' + params.percent + '%)';
+            },
+            position: function(point, params, dom, rect, size) {
+              const boxWidth = size.contentSize[0]
+              const boxHeight = size.contentSize[1]
+              const pad = 8
+              const gap = 14
+              let posX = point[0] + gap
+              let posY = point[1] - boxHeight / 2
+              if (posX + boxWidth > rect.right - pad) {
+                posX = point[0] - boxWidth - gap
+              }
+              if (posX < rect.left + pad) {
+                posX = rect.left + pad
+              }
+              if (posY < rect.top + pad) {
+                posY = rect.top + pad
+              }
+              if (posY + boxHeight > rect.bottom - pad) {
+                posY = rect.bottom - boxHeight - pad
+              }
+              return [posX, posY]
             }
           },
           legend: {
@@ -895,6 +920,8 @@ export default {
         
         const option = {
           tooltip: {
+            appendToBody: true,
+            confine: true,
             trigger: 'axis',
             triggerOn: 'mousemove',
             axisPointer: {

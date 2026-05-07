@@ -289,6 +289,133 @@ class DemoDataFunctionalAPITests(APITestCase):
         order.refresh_from_db()
         self.assertEqual(order.status, 'completed')
 
+    def test_transfer_order_revise_and_cancel(self):
+        factory_wh = WarehouseNode.objects.filter(warehouse_type='factory', name__startswith='【演示】').first()
+        local_wh = WarehouseNode.objects.filter(warehouse_type='local', name__startswith='【演示】').first()
+        product = Product.objects.filter(production_template_key='f116').first()
+        self.assertIsNotNone(factory_wh)
+        self.assertIsNotNone(local_wh)
+        self.assertIsNotNone(product)
+        cr = self.client.post(
+            '/api/transfer-orders/',
+            {
+                'from_warehouse_id': factory_wh.id,
+                'to_warehouse_id': local_wh.id,
+                'note': '【测试】revise-draft',
+                'items': [{'product_id': product.id, 'color': '军绿', 'size': 'M', 'quantity': 1}],
+            },
+            format='json',
+        )
+        self.assertEqual(cr.status_code, status.HTTP_201_CREATED, msg=cr.content)
+        order = TransferOrder.objects.get(pk=cr.data['id'])
+
+        rev = self.client.post(
+            f'/api/transfer-orders/{order.id}/revise/',
+            {
+                'note': 'api revise note',
+                'items': [
+                    {
+                        'product_id': product.id,
+                        'color': '军绿',
+                        'size': 'M',
+                        'quantity': 2,
+                    }
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(rev.status_code, status.HTTP_200_OK, msg=rev.content)
+        order.refresh_from_db()
+        self.assertEqual(order.note, 'api revise note')
+        self.assertEqual(order.items.count(), 1)
+        self.assertEqual(order.items.first().quantity, 2)
+
+        rc = self.client.post(f'/api/transfer-orders/{order.id}/cancel/', {}, format='json')
+        self.assertEqual(rc.status_code, status.HTTP_200_OK, msg=rc.content)
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'cancelled')
+
+    def test_transfer_reverse_restores_stock(self):
+        factory_wh = WarehouseNode.objects.filter(warehouse_type='factory', name__startswith='【演示】').first()
+        local_wh = WarehouseNode.objects.filter(warehouse_type='local', name__startswith='【演示】').first()
+        product = Product.objects.filter(production_template_key='f116').first()
+        self.assertIsNotNone(factory_wh)
+        self.assertIsNotNone(local_wh)
+        self.assertIsNotNone(product)
+        src = Warehouse.objects.filter(
+            warehouse=factory_wh,
+            product=product,
+            quantity__gte=1,
+        ).first()
+        self.assertIsNotNone(src, msg='演示工厂仓需至少一条数量≥1 的成品库存以测冲销')
+
+        from_before = src.quantity
+        to_row, _ = Warehouse.objects.get_or_create(
+            warehouse=local_wh,
+            product=product,
+            color=src.color,
+            size=src.size,
+            defaults={'quantity': 0},
+        )
+        to_before = to_row.quantity
+
+        cr = self.client.post(
+            '/api/transfer-orders/',
+            {
+                'from_warehouse_id': factory_wh.id,
+                'to_warehouse_id': local_wh.id,
+                'note': '【测试】reverse-flow',
+                'items': [{'product_id': product.id, 'color': src.color, 'size': src.size, 'quantity': 1}],
+            },
+            format='json',
+        )
+        self.assertEqual(cr.status_code, status.HTTP_201_CREATED, msg=cr.content)
+        oid = cr.data['id']
+        cp = self.client.post(f'/api/transfer-orders/{oid}/complete/')
+        self.assertEqual(cp.status_code, status.HTTP_200_OK, msg=cp.content)
+
+        self.assertEqual(
+            Warehouse.objects.get(
+                warehouse=factory_wh,
+                product=product,
+                color=src.color,
+                size=src.size,
+            ).quantity,
+            from_before - 1,
+        )
+        self.assertEqual(
+            Warehouse.objects.get(
+                warehouse=local_wh,
+                product=product,
+                color=src.color,
+                size=src.size,
+            ).quantity,
+            to_before + 1,
+        )
+
+        rv = self.client.post(f'/api/transfer-orders/{oid}/reverse/')
+        self.assertEqual(rv.status_code, status.HTTP_200_OK, msg=rv.content)
+        self.assertEqual(rv.data.get('status'), 'reversed')
+
+        self.assertEqual(
+            Warehouse.objects.get(
+                warehouse=factory_wh,
+                product=product,
+                color=src.color,
+                size=src.size,
+            ).quantity,
+            from_before,
+        )
+        self.assertEqual(
+            Warehouse.objects.get(
+                warehouse=local_wh,
+                product=product,
+                color=src.color,
+                size=src.size,
+            ).quantity,
+            to_before,
+        )
+
     def test_superuser_backup_export_zip(self):
         db_name = str(settings.DATABASES['default'].get('NAME', ''))
         if ':memory:' in db_name or db_name.startswith('file:memory'):

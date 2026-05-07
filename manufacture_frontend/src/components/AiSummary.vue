@@ -26,7 +26,7 @@
               v-if="dataScope === 'all'"
               type="info"
               :closable="false"
-              title="全量数据分析耗时较长，建议优先选择具体范围（如出库/仓库）以提高成功率。"
+              title="全量数据分析耗时较长，建议优先选择具体范围（如调拨单/仓库）以提高成功率。"
               style="margin-bottom: 12px"
             />
 
@@ -35,7 +35,7 @@
                 v-model="query"
                 type="textarea"
                 :rows="4"
-                placeholder="例如：总结最近出库异常，并给出明天的处理优先级"
+                placeholder="例如：总结最近调拨单（草稿/已执行/冲销）情况，并给出明天的处理优先级"
                 maxlength="1000"
                 show-word-limit
               />
@@ -251,7 +251,7 @@ const scopes = [
   { label: '产品', value: 'product' },
   { label: '生产计划', value: 'plan' },
   { label: '仓库', value: 'warehouse' },
-  { label: '出库', value: 'outbound' }
+  { label: '调拨单', value: 'outbound' }
 ]
 
 const loadHistory = () => {
